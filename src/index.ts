@@ -217,14 +217,18 @@ function normaliseZetrixDid(value: string, role: "holder" | "issuer"): string {
   const enc = asEncodedEd25519PubKey(v);
   if (enc) return deriveDidFromEncodedPublicKey(enc);
   if (/^ZTX[A-Za-z0-9]+$/.test(v)) {
+    const R = role; // 'holder' | 'issuer'
     throw new Error(
-      `${role}Did cannot be a Zetrix address (${v}). The BaaS expects the DID form 'did:zid:<rawPubKey>'. ` +
-        `Either set ${role}Did to 'did:zid:...', or let the tool derive it by providing ${role}PublicKey (b001… form) or ${role}PrivateKey — ` +
-        `a ZTX3 address cannot be reversed into a public key locally.`
+      `NEXT_STEP_REQUIRED: "${v}" is a Zetrix address, not a DID — the BaaS needs the ${R} DID (did:zid:<rawPubKey> form), and Zetrix addresses can't be reversed into a public key locally.\n\n` +
+        `Ask the user to provide ONE of the following, then retry with that field set on the tool call:\n` +
+        `  • ${R} DID            → pass as \`${R}Did\`           e.g. "did:zid:<64 hex chars>"\n` +
+        `  • ${R} public key     → pass as \`${R}PublicKey\`     (any of: 64-hex raw, or 76-hex "b001…" encoded, or a did:zid:… string)\n` +
+        `  • ${R} private key    → pass as \`${R}PrivateKey\`    (the tool will derive the DID and sign with it)\n\n` +
+        `Do NOT retry with the ZTX3 address — it cannot be used.`
     );
   }
   throw new Error(
-    `Cannot interpret ${role}Did "${v}". Expected 'did:zid:<rawPubKey>' or an encoded/raw public key.`
+    `NEXT_STEP_REQUIRED: cannot interpret ${role}Did value "${v}". Ask the user for the ${role}'s DID in did:zid:<rawPubKey> form, or their public key (64-hex raw / 76-hex b001… encoded), or their private key.`
   );
 }
 
@@ -723,13 +727,18 @@ const tools: Tool[] = [
   {
     name: "zetrix_vc_issue",
     description:
-      "Issuer directly issues a VC to a specific holder DID or address. Returns the signed VC (includes `vc.id`). Does NOT download; if the holder wants the canonical VC later, they call `zetrix_vc_download` with the returned vcId.\n" +
+      "Issuer directly issues a VC to a specific holder identified by DID or key. Returns the signed VC (includes `vc.id`). Does NOT download; if the holder wants the canonical VC later, they call `zetrix_vc_download` with the returned vcId.\n" +
       "\n" +
       "★ USE THIS when the user specifies a target recipient different from the configured holder:\n" +
-      "  • 'issue VC to address A'\n" +
       "  • 'issue VC to did:zid:…'\n" +
-      "  • 'issue to this holder: <address>'\n" +
-      "  • 'issue VC but don't download' (any variant where they want issuance without download)\n" +
+      "  • 'issue VC for this holder — here is their public key'\n" +
+      "  • 'issue VC but don't download'\n" +
+      "\n" +
+      "★ Identifying the holder — Zetrix addresses (e.g. `ZTX3LAYaP9UwNpCXFz4SrsN1B8LiJ8y4CiRcg`) CANNOT be used. If the user gives you only a ZTX3 address, you must ask them to provide ONE of:\n" +
+      "  • `holderDid` (did:zid:<64-hex>) — preferred\n" +
+      "  • `holderPublicKey` — a 64-hex raw pubkey or 76-hex `b001…` encoded pubkey\n" +
+      "  • `holderPrivateKey` — the tool will derive the DID from it\n" +
+      "Don't attempt to pass the ZTX3 address as holderDid — the BaaS needs the DID form and Zetrix addresses can't be reversed into a public key locally.\n" +
       "\n" +
       "★ DO NOT USE when the user just says 'issue me a VC' / 'issue VC for me' without specifying a recipient — that means 'issue to me and complete the flow'; use `zetrix_vc_request_credential` instead.",
     inputSchema: {
