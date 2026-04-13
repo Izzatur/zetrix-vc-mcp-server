@@ -25,6 +25,8 @@ See [`VC_VP_API_REFERENCE.md`](VC_VP_API_REFERENCE.md) for the full API contract
 | 6 | Present VP (combo) | create+sign+submit         | Holder            | `zetrix_vp_present`   |
 | 7 | Cache VP           | `POST /cred/v1/vp/cache`   | Holder            | `zetrix_vp_cache`     |
 | 8 | Verify VP          | `POST /cred/v1/vp/verify`  | Verifier          | `zetrix_vp_verify`    |
+| 9 | Revoke VC (flow 3) | 3-step signed flow         | Issuer            | `zetrix_vc_revoke` (combo) + `zetrix_vc_revoke_create_blob` / `zetrix_vc_revoke_submit` / `zetrix_vc_revoke_status` |
+| 10 | Full issuance (flow 1 multi-step) | 5-step with separate BBS+ sign | Issuer | `zetrix_vc_create` / `zetrix_vc_sign_bbs` / `zetrix_vc_submit` |
 
 > **VC flow ordering:** The BaaS enforces `apply → issue → download`
 > strictly in that order. Calling `download` on an `apply` `vcId`
@@ -32,6 +34,8 @@ See [`VC_VP_API_REFERENCE.md`](VC_VP_API_REFERENCE.md) for the full API contract
 > `HTTP 400: The VC application has not been issued yet`. For one-shot
 > holder-side issuance, use `zetrix_vc_request_credential` — it
 > orchestrates all three steps for you.
+> For revocation, use the `zetrix_vc_revoke` combo which runs
+> create-blob → sign → submit in the correct order.
 
 Plus:
 

@@ -23,6 +23,7 @@ import {
   RangeProofDto,
   VerifiableCredential,
   VerifiablePresentation,
+  RevokeSignerEntry,
 } from "./zetrix-vc-client.js";
 import {
   ZetrixVcSigner,
@@ -160,6 +161,17 @@ async function resolveEncodedPublicKey(
   const env = asEncodedEd25519PubKey(envCandidate);
   if (env) return env;
   return signer.getPublicKey(privateKeyForDerivation);
+}
+
+/**
+ * Require a non-empty tool argument. No env fallback.
+ */
+function requireArg(value: string | undefined, name: string): string {
+  const resolved = pick(value);
+  if (!resolved) {
+    throw new Error(`Missing \`${name}\`. Provide it as a tool argument.`);
+  }
+  return resolved;
 }
 
 /**
@@ -869,6 +881,174 @@ const tools: Tool[] = [
       required: ["vp"],
     },
   },
+
+  // --------------------- VC: Revocation (Flow 3) ---------------------
+  {
+    name: "zetrix_vc_revoke_create_blob",
+    description:
+      "Step 1 of 3 in the revocation flow. Issuer requests a revocation blob for a specific vcId. " +
+      "Returns `{ blobId, blob }` where `blob` is a hex-encoded protobuf transaction the issuer must sign " +
+      "(use `zetrix_vc_revoke` for the one-shot combo). " +
+      "Maps to POST /cred/v1/vc/revoke/create-blob.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        vcId: { type: "string", description: "The VC to revoke (e.g. did:zid:...)." },
+        remark: { type: "string", description: "Optional free-text remark explaining the revocation." },
+        issuerAddress: {
+          type: "string",
+          description:
+            "Issuer Zetrix address (ZTX3…). Overrides ISSUER_KEY env var when provided. " +
+            "If neither is set, derived from ISSUER_PRIVATE_KEY is NOT attempted because this endpoint " +
+            "needs the address form (ZTX3…), not an encoded pubkey.",
+        },
+      },
+      required: ["vcId"],
+    },
+  },
+  {
+    name: "zetrix_vc_revoke_submit",
+    description:
+      "Step 3 of 3 in the revocation flow. Issuer submits the signed revocation blob. " +
+      "Maps to POST /cred/v1/vc/revoke/submit.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        blobId: { type: "string", description: "blobId returned from zetrix_vc_revoke_create_blob." },
+        signerList: {
+          type: "array",
+          description:
+            "List of { signBlob, publicKey } entries. Typically a single entry: the issuer signing " +
+            "the blob returned in step 1.",
+          items: {
+            type: "object",
+            properties: {
+              signBlob: { type: "string", description: "Hex signature produced by signing the step-1 blob with issuer's Ed25519 private key." },
+              publicKey: { type: "string", description: "Issuer's Zetrix-encoded Ed25519 public key (b001… form)." },
+            },
+            required: ["signBlob", "publicKey"],
+          },
+        },
+      },
+      required: ["blobId", "signerList"],
+    },
+  },
+  {
+    name: "zetrix_vc_revoke",
+    description:
+      "One-shot VC revocation: create-blob → sign (locally with issuer key) → submit, in that strict order. " +
+      "Use this instead of the three individual tools unless you need fine-grained control. " +
+      "⚠️ Destructive: revocation is recorded on-chain in the RCL contract and cannot be undone. " +
+      "Requires ISSUER_PRIVATE_KEY (or issuerPrivateKey arg) to sign, and the issuer's Zetrix address for the create-blob step.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        vcId: { type: "string", description: "The VC to revoke (e.g. did:zid:...)." },
+        remark: { type: "string", description: "Optional free-text remark explaining the revocation." },
+        issuerAddress: {
+          type: "string",
+          description:
+            "Issuer Zetrix address (ZTX3…). Overrides ISSUER_KEY env var when provided. Required for create-blob.",
+        },
+        issuerPrivateKey: {
+          type: "string",
+          description: "Issuer Ed25519 private key used to sign the revocation blob. Overrides ISSUER_PRIVATE_KEY env var.",
+        },
+      },
+      required: ["vcId"],
+    },
+  },
+  {
+    name: "zetrix_vc_revoke_status",
+    description:
+      "Query the current revocation status of a VC. Read-only; no signing required. " +
+      "Maps to POST /cred/v1/vc/revoke/status.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        vcId: { type: "string", description: "The VC id to check (e.g. did:zid:...)." },
+        issuer: {
+          type: "string",
+          description: "Issuer Zetrix address (ZTX3…). Overrides ISSUER_KEY env var when provided.",
+        },
+      },
+      required: ["vcId"],
+    },
+  },
+
+  // --------------------- Full Flow 1 (multi-step VC issuance) ---------------------
+  {
+    name: "zetrix_vc_create",
+    description:
+      "Step 3 of the full Flow 1 VC issuance (after apply). Issuer requests the canonical VC payload to " +
+      "sign with BBS+ and Ed25519. Returns the BBS+ statements (`bbsBlsBase64`) and the Ed25519 blob " +
+      "(`ed25519Blob`). Rarely called directly — use `zetrix_vc_issue` or `zetrix_vc_request_credential` " +
+      "instead unless you specifically need the multi-step flow. " +
+      "Maps to POST /cred/v1/vc/create.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        vcId: { type: "string", description: "vcId returned by the prior zetrix_vc_apply call." },
+        data: {
+          type: "array",
+          description: "List of TemplateMetadataDto (same shape as apply/issue).",
+          items: {
+            type: "object",
+            properties: {
+              templateId: { type: "string" },
+              passDesignId: { type: "string" },
+              metadata: { type: "object", additionalProperties: true },
+              tds: { type: "string" },
+            },
+            required: ["metadata"],
+          },
+        },
+        issuanceDate: { type: "string", description: "yyyy-MM-dd." },
+        expirationDate: { type: "string", description: "yyyy-MM-dd." },
+        validFrom: { type: "string", description: "yyyy-MM-dd." },
+        validUntil: { type: "string", description: "yyyy-MM-dd." },
+      },
+      required: ["vcId", "data"],
+    },
+  },
+  {
+    name: "zetrix_vc_sign_bbs",
+    description:
+      "Step 4 of Flow 1. Signs the canonicalized VC statements with the issuer's BBS+ keypair. " +
+      "Requires the issuer's BBS+ multibase-encoded public/private keys (generated at " +
+      "https://identity-sandbox.zetrix.com/). Maps to POST /cred/bbs/vc/sign.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        publicKeyMultibase: { type: "string", description: "Issuer BBS+ public key (multibase)." },
+        privateKeyMultibase: { type: "string", description: "Issuer BBS+ private key (multibase)." },
+        data: {
+          type: "array",
+          description: "Base64-encoded statements to sign (from zetrix_vc_create response).",
+          items: { type: "string" },
+        },
+      },
+      required: ["publicKeyMultibase", "privateKeyMultibase", "data"],
+    },
+  },
+  {
+    name: "zetrix_vc_submit",
+    description:
+      "Step 6 of Flow 1. Submits both signatures (Ed25519 + BBS+) to finalize issuance. " +
+      "Maps to POST /cred/v1/vc/submit.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        vcId: { type: "string" },
+        ed25519PubKey: { type: "string" },
+        ed25519SignData: { type: "string" },
+        bbsBlsPubKey: { type: "string" },
+        bbsBlsSignData: { type: "string" },
+        keyExpiry: { type: "number", description: "Default 0 or per-issuer preference." },
+      },
+      required: ["vcId", "ed25519PubKey", "ed25519SignData", "bbsBlsPubKey", "bbsBlsSignData"],
+    },
+  },
 ];
 
 // -------------------------------------------------------------------------
@@ -1425,6 +1605,139 @@ function registerHandlers(server: Server) {
             vp,
             ed25519PubKey: args.ed25519PubKey as string | undefined,
             bbsPublicKey: args.bbsPublicKey as string | undefined,
+          });
+          return toTextResult(resp);
+        }
+
+        // --------- Revocation Flow 3 ---------
+        case "zetrix_vc_revoke_create_blob": {
+          const vcId = requireArg(args.vcId as string | undefined, "vcId");
+          const issuerAddress = requireEnv(
+            ISSUER_KEY,
+            "issuerAddress (or ISSUER_KEY env)",
+            args.issuerAddress as string | undefined
+          );
+          const resp = await vcClient.revokeCreateBlob({
+            vcId,
+            remark: args.remark as string | undefined,
+            issuerAddress,
+          });
+          return toTextResult(resp);
+        }
+
+        case "zetrix_vc_revoke_submit": {
+          const blobId = requireArg(args.blobId as string | undefined, "blobId");
+          const signerList = args.signerList as RevokeSignerEntry[] | undefined;
+          if (!Array.isArray(signerList) || signerList.length === 0) {
+            throw new Error("`signerList` must be a non-empty array of { signBlob, publicKey }.");
+          }
+          const resp = await vcClient.revokeSubmit({ blobId, signerList });
+          return toTextResult(resp);
+        }
+
+        case "zetrix_vc_revoke": {
+          const vcId = requireArg(args.vcId as string | undefined, "vcId");
+          const issuerAddress = requireEnv(
+            ISSUER_KEY,
+            "issuerAddress (or ISSUER_KEY env)",
+            args.issuerAddress as string | undefined
+          );
+          const issuerPrivateKey = requireEnv(
+            ISSUER_PRIVATE_KEY,
+            "ISSUER_PRIVATE_KEY",
+            args.issuerPrivateKey as string | undefined
+          );
+
+          // Step 1: request the blob to sign
+          const created = await vcClient.revokeCreateBlob({
+            vcId,
+            remark: args.remark as string | undefined,
+            issuerAddress,
+          });
+          const hexBlob = pick(created.blob, created.ed25519Blob);
+          if (!hexBlob) {
+            throw new Error(
+              `revoke/create-blob returned no blob. Raw response: ${JSON.stringify(created).slice(0, 300)}`
+            );
+          }
+
+          // Step 2: sign the hex-encoded protobuf blob locally
+          const sig = await signer.signHex(hexBlob, issuerPrivateKey);
+
+          // Step 3: submit the revocation
+          const submitted = await vcClient.revokeSubmit({
+            blobId: created.blobId,
+            signerList: [{ signBlob: sig.signData, publicKey: sig.publicKey }],
+          });
+
+          return toTextResult({
+            vcId,
+            issuerAddress,
+            blobId: created.blobId,
+            submit: submitted,
+          });
+        }
+
+        case "zetrix_vc_revoke_status": {
+          const vcId = requireArg(args.vcId as string | undefined, "vcId");
+          const issuer = requireEnv(
+            ISSUER_KEY,
+            "issuer (or ISSUER_KEY env)",
+            args.issuer as string | undefined
+          );
+          const resp = await vcClient.revokeStatus({ vcId, issuer });
+          return toTextResult(resp);
+        }
+
+        // --------- Full Flow 1 (vc/create, bbs/sign, vc/submit) ---------
+        case "zetrix_vc_create": {
+          const vcId = requireArg(args.vcId as string | undefined, "vcId");
+          const rawData = args.data as TemplateMetadataDto[] | undefined;
+          if (!rawData || !Array.isArray(rawData) || rawData.length === 0) {
+            throw new Error("`data` must be a non-empty array of TemplateMetadataDto.");
+          }
+          const data = applyDefaultTemplateId(rawData);
+          const resp = await vcClient.createVc({
+            vcId,
+            data,
+            issuanceDate: args.issuanceDate as string | undefined,
+            expirationDate: args.expirationDate as string | undefined,
+            validFrom: args.validFrom as string | undefined,
+            validUntil: args.validUntil as string | undefined,
+          });
+          return toTextResult(resp);
+        }
+
+        case "zetrix_vc_sign_bbs": {
+          const publicKeyMultibase = requireArg(
+            args.publicKeyMultibase as string | undefined,
+            "publicKeyMultibase"
+          );
+          const privateKeyMultibase = requireArg(
+            args.privateKeyMultibase as string | undefined,
+            "privateKeyMultibase"
+          );
+          const data = args.data as string[] | undefined;
+          if (!Array.isArray(data) || data.length === 0) {
+            throw new Error("`data` must be a non-empty array of base64 statements.");
+          }
+          const resp = await vcClient.signVcBbs({ publicKeyMultibase, privateKeyMultibase, data });
+          return toTextResult(resp);
+        }
+
+        case "zetrix_vc_submit": {
+          const vcId = requireArg(args.vcId as string | undefined, "vcId");
+          const ed25519PubKey = requireArg(args.ed25519PubKey as string | undefined, "ed25519PubKey");
+          const ed25519SignData = requireArg(args.ed25519SignData as string | undefined, "ed25519SignData");
+          const bbsBlsPubKey = requireArg(args.bbsBlsPubKey as string | undefined, "bbsBlsPubKey");
+          const bbsBlsSignData = requireArg(args.bbsBlsSignData as string | undefined, "bbsBlsSignData");
+          const resp = await vcClient.submitVc({
+            vcId,
+            ed25519PubKey,
+            ed25519SignData,
+            bbsBlsPubKey,
+            bbsBlsSignData,
+            keyExpiry: args.keyExpiry as number | undefined,
           });
           return toTextResult(resp);
         }

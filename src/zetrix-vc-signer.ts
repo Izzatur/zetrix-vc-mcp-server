@@ -52,10 +52,34 @@ export class ZetrixVcSigner {
   /**
    * Sign the UTF-8 bytes of `payload` with the given Ed25519 private key.
    * Returns hex-encoded `signData` and the derived `publicKey`.
+   *
+   * Use this for VC/VP apply/download/vp signing where the signed pre-image
+   * is a plain text JSON string, DID string, or similar.
    */
   async sign(payload: string, privateKey: string): Promise<Ed25519Signature> {
     await this.init();
     const bytes = new Uint8Array(Buffer.from(payload, "utf8"));
+    const signData: string = this.signature.sign(bytes, privateKey);
+    const publicKey: string = this.KeyPair.getEncPublicKey(privateKey);
+    return { signData, publicKey };
+  }
+
+  /**
+   * Sign a hex-encoded blob — i.e. hex-decode the payload first and sign the
+   * raw bytes. Used for Zetrix transaction blobs (protobuf-encoded), which is
+   * the form returned by `/cred/v1/vc/revoke/create-blob` and similar
+   * endpoints. Mirrors the SDK's `_signBlob`:
+   *   Buffer.from(blob, 'hex') → Uint8Array → sign.
+   */
+  async signHex(hexPayload: string, privateKey: string): Promise<Ed25519Signature> {
+    await this.init();
+    const clean = hexPayload.trim();
+    if (!/^[0-9a-fA-F]+$/.test(clean) || clean.length % 2 !== 0) {
+      throw new Error(
+        `Expected a hex-encoded blob (even-length hex chars), got length ${clean.length}.`
+      );
+    }
+    const bytes = new Uint8Array(Buffer.from(clean, "hex"));
     const signData: string = this.signature.sign(bytes, privateKey);
     const publicKey: string = this.KeyPair.getEncPublicKey(privateKey);
     return { signData, publicKey };

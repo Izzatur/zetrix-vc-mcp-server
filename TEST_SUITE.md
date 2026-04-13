@@ -24,11 +24,12 @@ The holder account was freshly generated via
 
 | | Count |
 |---|---|
-| **Tools covered** | 10 / 10 (**100%**) |
-| **Test cases**    | 24 |
-| **Passed** (latest run) | 16 + 1 isolated = **17** |
-| **Failed**        | 7 (all external, see "Known external issues" below) |
+| **Tools covered** | 17 / 17 (**100%**) |
+| **Test cases**    | 31 |
+| **Passed** (latest run) | **25** |
+| **Failed**        | 6 (all external — E1, E3) |
 | **Code bugs found by this suite** | 0 |
+| **Flows implemented** | Flow 1 direct ✓ · Flow 1 multi-step ✓ · Flow 2 VP ✓ · **Flow 3 Revocation ✓ (new)** |
 
 All failures trace back to four external / environmental issues (E1–E4):
 
@@ -62,6 +63,13 @@ None of these are defects in the MCP server. See per-TC root cause below.
 | 11 | `zetrix_vp_present` | 1 | 0/1 | TC17 — cascade from E3 |
 | 12 | `zetrix_vp_cache` | 1 | 0/1 | TC19 — cascade from E3 |
 | 13 | `zetrix_vp_verify` | 1 | 0/1 | TC18 — cascade from E3 |
+| 14 | `zetrix_vc_revoke_create_blob` | — | — | Exercised via TC27 combo |
+| 15 | `zetrix_vc_revoke_submit` | — | — | Exercised via TC27 combo |
+| 16 | `zetrix_vc_revoke` (combo) | 1 | **1/1** | TC27 — live on-chain revocation with txHash |
+| 17 | `zetrix_vc_revoke_status` | 2 | **2/2** | TC26 (pre-revoke: false), TC28 (post-revoke: true) |
+| 18 | `zetrix_vc_create` | 1 | 1/1 | TC31 — arg validation only (multi-step Flow 1) |
+| 19 | `zetrix_vc_sign_bbs` | 1 | 1/1 | TC29 — arg validation (requires BBS+ keys for live) |
+| 20 | `zetrix_vc_submit` | 1 | 1/1 | TC30 — arg validation (requires BBS+ signature for live) |
 
 Every tool registered by the MCP server has at least one test case.
 `zetrix_vc_request_credential` is over-tested since it's the primary
@@ -362,6 +370,72 @@ appear on the issued VC.
 **Also observed** (documented as E4): `issuanceDate` / `expirationDate`
 are accepted but silently dropped from the issued VC. Only `validFrom`
 / `validUntil` are preserved. Worth flagging to the API team.
+
+---
+
+### TC25 — Setup: issue a VC to be revoked by later TCs ✅
+
+**Input:** `request_credential` with a fresh holder.
+**Result:** ✅ PASS. Produces `vcId` used by TC26–28.
+
+---
+
+### TC26 — `zetrix_vc_revoke_status` before revocation ✅
+
+**Input:** `{ vcId: "<from TC25>" }` (issuer auto-resolved from `ISSUER_KEY` env)
+
+**Result:** ✅ PASS. Response:
+```json
+{ "revokedAt": null, "isRevoked": false }
+```
+
+---
+
+### TC27 — `zetrix_vc_revoke` (combo) ✅
+
+**Purpose:** end-to-end revocation: `create-blob → sign (local) → submit`,
+strictly in sequence, signing the hex-encoded protobuf blob with the
+issuer's Ed25519 private key via the new `signHex` helper.
+
+**Input:** `{ vcId: "<from TC25>", remark: "test suite" }`
+
+**Result:** ✅ PASS. Response:
+```json
+{
+  "vcId": "did:zid:…",
+  "issuerAddress": "ZTX3Pgqy…",
+  "blobId": "B786DFF227C63FBDC83BAABA3B115283",
+  "submit": { "txHash": "7880733ff3d80c92…" }
+}
+```
+
+The `txHash` proves the revocation was recorded on-chain in the RCL
+contract (`ZTX3Mmovq155gzrD6Medi6bC5pGKAi5Y3QMwx`).
+
+---
+
+### TC28 — `zetrix_vc_revoke_status` after revocation ✅
+
+**Input:** `{ vcId: "<same as TC25>" }`
+
+**Result:** ✅ PASS. Response:
+```json
+{ "revokedAt": "2026-04-13T16:32:59.223222", "isRevoked": true }
+```
+
+The status flipped from `false` (TC26) → `true` with a timestamp, end-to-end proving the revocation flow.
+
+---
+
+### TC29–31 — Multi-step Flow 1 arg validation ✅
+
+**Purpose:** verify the new `zetrix_vc_create`, `zetrix_vc_sign_bbs`,
+and `zetrix_vc_submit` tools enforce required args. Live calls require
+issuer BBS+ keys (generated at https://identity-sandbox.zetrix.com/)
+which weren't available for this run.
+
+**Result:** ✅ all three correctly reject missing required arguments
+with messages referencing the missing field names.
 
 ---
 

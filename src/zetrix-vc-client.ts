@@ -171,6 +171,77 @@ export interface VerifyVpRespDto {
   vcDetail?: VcDetail[];
 }
 
+// ----- Full Flow 1 (apply → create → bbs-sign → submit → download) -----
+
+export interface CreateVcReqDto {
+  vcId: string;
+  issuanceDate?: string;
+  expirationDate?: string;
+  validFrom?: string;
+  validUntil?: string;
+  data: TemplateMetadataDto[];
+}
+
+/** `/cred/v1/vc/create` response — includes the canonical statements to feed
+ *  into BBS+ sign plus the Ed25519 blob to sign. Actual shape observed from
+ *  Flow 1 usage; wrapped in `ResponseWrapper` by the server. */
+export interface CreateVcRespDto {
+  vcId?: string;
+  ed25519Blob?: string;             // hex of the JWT/protobuf blob to sign
+  bbsBlsBase64?: string[];          // canonicalized statements for BBS+ sign
+  [key: string]: unknown;
+}
+
+export interface SignBbsReqDto {
+  publicKeyMultibase: string;
+  privateKeyMultibase: string;
+  data: string[];                    // base64 statements
+}
+
+export interface SignBbsRespDto {
+  signData: string;                  // BBS+ signature
+  [key: string]: unknown;
+}
+
+export interface SubmitVcFromCreateReqDto {
+  vcId: string;
+  ed25519PubKey: string;
+  ed25519SignData: string;
+  bbsBlsPubKey: string;
+  bbsBlsSignData: string;
+  keyExpiry?: number;
+}
+
+// ----- Revocation Flow 3 -----
+
+export interface RevokeCreateBlobReqDto {
+  vcId: string;
+  remark?: string;
+  issuerAddress: string;
+}
+
+export interface RevokeCreateBlobRespDto {
+  blobId: string;
+  blob?: string;                     // hex blob (aliased as ed25519Blob on some versions)
+  ed25519Blob?: string;
+  [key: string]: unknown;
+}
+
+export interface RevokeSignerEntry {
+  signBlob: string;
+  publicKey: string;
+}
+
+export interface RevokeSubmitReqDto {
+  blobId: string;
+  signerList: RevokeSignerEntry[];
+}
+
+export interface RevokeStatusReqDto {
+  vcId: string;
+  issuer: string;                    // issuer Zetrix address (ZTX3…)
+}
+
 // ----- Client -----
 
 export class ZetrixVcClient {
@@ -233,6 +304,40 @@ export class ZetrixVcClient {
   /** POST /cred/v1/vp/verify */
   async verifyVp(req: VerifyVpReqDto): Promise<VerifyVpRespDto> {
     return this.post<VerifyVpRespDto>("/cred/v1/vp/verify", req);
+  }
+
+  // --- Full Flow 1 (create / bbs-sign / submit) ---
+
+  /** POST /cred/v1/vc/create — step 3 of the full Flow 1 VC issuance. */
+  async createVc(req: CreateVcReqDto): Promise<CreateVcRespDto> {
+    return this.post<CreateVcRespDto>("/cred/v1/vc/create", req);
+  }
+
+  /** POST /cred/bbs/vc/sign — step 4 of Flow 1, signs with issuer BBS+ key. */
+  async signVcBbs(req: SignBbsReqDto): Promise<SignBbsRespDto> {
+    return this.post<SignBbsRespDto>("/cred/bbs/vc/sign", req);
+  }
+
+  /** POST /cred/v1/vc/submit — step 6 of Flow 1, submits both signatures. */
+  async submitVc(req: SubmitVcFromCreateReqDto): Promise<unknown> {
+    return this.post<unknown>("/cred/v1/vc/submit", req);
+  }
+
+  // --- Revocation Flow 3 ---
+
+  /** POST /cred/v1/vc/revoke/create-blob — returns a hex blob for the issuer to sign. */
+  async revokeCreateBlob(req: RevokeCreateBlobReqDto): Promise<RevokeCreateBlobRespDto> {
+    return this.post<RevokeCreateBlobRespDto>("/cred/v1/vc/revoke/create-blob", req);
+  }
+
+  /** POST /cred/v1/vc/revoke/submit — submits the signed revocation. */
+  async revokeSubmit(req: RevokeSubmitReqDto): Promise<unknown> {
+    return this.post<unknown>("/cred/v1/vc/revoke/submit", req);
+  }
+
+  /** POST /cred/v1/vc/revoke/status — query current revocation status for a vcId. */
+  async revokeStatus(req: RevokeStatusReqDto): Promise<unknown> {
+    return this.post<unknown>("/cred/v1/vc/revoke/status", req);
   }
 
   // ----- internals -----
