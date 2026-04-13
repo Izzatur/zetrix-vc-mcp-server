@@ -56,7 +56,7 @@ None of these are defects in the MCP server. See per-TC root cause below.
 | 5 | `zetrix_vc_request_credential` | 6 | 5/6 | TC10, 11, 21, 22, 23 ✓; TC24 ✓ in isolation (needs fresh holder — template uniqueness) |
 | 6 | `zetrix_vc_apply` | 1 | 1/1 | TC12 |
 | 7 | `zetrix_vc_issue` | 1 | 1/1 | TC13 — full W3C VC with BBS+ + Ed25519 proofs |
-| 8 | `zetrix_vc_download` | 1 | 0/1 | TC14 — E2 |
+| 8 | `zetrix_vc_download` | 1 | ⚠️ 0/1 by-design | TC14 — *negative* case proving the apply → issue → download ordering. Positive path tested via TC11. |
 | 9 | `zetrix_vp_create` | 1 | 0/1 | TC15 — E3 |
 | 10 | `zetrix_vp_submit` | 1 | 0/1 | TC16 — cascade from E3 |
 | 11 | `zetrix_vp_present` | 1 | 0/1 | TC17 — cascade from E3 |
@@ -222,18 +222,35 @@ This is the **primary acceptance test** for the whole server.
 
 ---
 
-### TC14 — `zetrix_vc_download` with a pending vcId ❌ (E2)
+### TC14 — `zetrix_vc_download` with a pending (un-issued) vcId ⚠️ *by-design negative test*
 
-**Input:** `{ vcId: "<vcId from TC12>" }`
+**Purpose:** verify that the BaaS enforces the **apply → issue →
+download** ordering strictly. Download must only succeed after the
+issuer has processed the application. This TC is a *negative* case
+that confirms the constraint, not a coverage gap.
+
+**Input:** `{ vcId: "<vcId from TC12's standalone apply>" }` — the
+vcId comes from `apply` without an intervening `issue`.
 
 **Observed:** `HTTP 400: The VC application has not been issued yet`.
 
-**Root cause:** BaaS workflow constraint. `apply` creates a pending
-record that requires the issuer to process separately. When apply →
-issue → download is done as one orchestration (via
-`zetrix_vc_request_credential`) the server links them internally and
-download succeeds (TC11 proves this). Standalone apply followed by
-standalone download fails by design.
+**Interpretation:** ✅ Server behaves correctly — rejects download of
+a pending application. The MCP client correctly forwards the request
+and surfaces the error.
+
+**Positive proof of download:** TC11 runs the full `apply → issue →
+download` sequence via `zetrix_vc_request_credential` and returns a
+fully-signed W3C JSON-LD VerifiableCredential. That VC comes from the
+download step — if download were broken, TC11 would fail.
+
+**Workflow rules to follow:**
+1. Always run `apply → issue → download` in that order.
+2. For one-shot issuance, prefer `zetrix_vc_request_credential` — it
+   orchestrates the ordering automatically.
+3. Use standalone `zetrix_vc_download` only when the issue step has
+   already happened out-of-band (and you have the apply `vcId`).
+
+Matches external issue E2.
 
 ---
 
@@ -386,16 +403,21 @@ any other client.
 **Mitigation:** run the MCP server from a non-datacenter IP, or ask
 Zetrix to whitelist the server IP / ASN on the gateway.
 
-### E2 — Apply then standalone download
-**Affects:** TC14.
-**Cause:** BaaS workflow — apply creates a pending record that requires
-an explicit issue step by the issuer before the holder can download.
-The `/cred/v1/vc/issue` endpoint doesn't take the apply vcId, so the
-three steps must be orchestrated as one flow
-(`zetrix_vc_request_credential`) for the linkage to work.
-**Mitigation:** use `zetrix_vc_request_credential` for end-to-end
-issuance. Standalone download is only useful for VCs already linked
-by that orchestration.
+### E2 — Strict `apply → issue → download` ordering
+**Affects:** TC14 (by design).
+**Cause:** BaaS workflow enforces **all three steps in strict order**.
+`apply` creates a pending record; it does NOT issue. `issue` must run
+before `download` can succeed for that `vcId`. Skipping or reordering
+any step yields `HTTP 400: The VC application has not been issued yet`.
+**Not a bug** — this is the documented workflow. The MCP server exposes
+all three tools and also provides `zetrix_vc_request_credential` which
+runs them in the correct order automatically.
+**Rule of thumb:**
+- For one-shot holder-side issuance, call `zetrix_vc_request_credential`.
+- For multi-step workflows where `issue` is done by another party /
+  system, call `zetrix_vc_download` only after that `issue` completes.
+- Never call `zetrix_vc_download` directly on a fresh `apply` `vcId`
+  — the issue step must happen first.
 
 ### E3 — VP create fails with "Failed to verify VC Ed25519Signature2020"
 **Affects:** TC15–19 (VP create, submit, present, cache, verify).

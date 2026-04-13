@@ -19,12 +19,19 @@ See [`VC_VP_API_REFERENCE.md`](VC_VP_API_REFERENCE.md) for the full API contract
 |---|--------------------|----------------------------|-------------------|-----------------------|
 | 1 | Apply VC           | `POST /cred/v1/vc/apply`   | Holder            | `zetrix_vc_apply`     |
 | 2 | Issue VC           | `POST /cred/v1/vc/issue`   | Issuer            | `zetrix_vc_issue`     |
-| 3 | Download VC        | `POST /cred/v1/vc/download`| Holder / Issuer   | `zetrix_vc_download`  |
+| 3 | Download VC *(after 1 & 2)* | `POST /cred/v1/vc/download`| Holder / Issuer   | `zetrix_vc_download`  |
 | 4 | Create VP (blob)   | `POST /cred/v1/vp/create`  | Holder            | `zetrix_vp_create`    |
 | 5 | Submit VP (signed) | `POST /cred/v1/vp/submit`  | Holder            | `zetrix_vp_submit`    |
 | 6 | Present VP (combo) | create+sign+submit         | Holder            | `zetrix_vp_present`   |
 | 7 | Cache VP           | `POST /cred/v1/vp/cache`   | Holder            | `zetrix_vp_cache`     |
 | 8 | Verify VP          | `POST /cred/v1/vp/verify`  | Verifier          | `zetrix_vp_verify`    |
+
+> **VC flow ordering:** The BaaS enforces `apply → issue → download`
+> strictly in that order. Calling `download` on an `apply` `vcId`
+> before the issuer has processed it returns
+> `HTTP 400: The VC application has not been issued yet`. For one-shot
+> holder-side issuance, use `zetrix_vc_request_credential` — it
+> orchestrates all three steps for you.
 
 Plus:
 

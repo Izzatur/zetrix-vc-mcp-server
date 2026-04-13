@@ -659,6 +659,10 @@ const tools: Tool[] = [
     name: "zetrix_vc_download",
     description:
       "Holder downloads an issued VC. The `vcId` is signed with the holder's (or issuer's, when `isIssuer=true`) Ed25519 private key to prove ownership. " +
+      "**Workflow ordering: download only works AFTER the issuer has processed the application.** " +
+      "The BaaS enforces apply → issue → download strictly in order; downloading a `vcId` that is still in the APPLIED (pending) state returns `HTTP 400: The VC application has not been issued yet`. " +
+      "For end-to-end issuance in a single call use `zetrix_vc_request_credential`, which runs all three steps in the correct order. " +
+      "Use `zetrix_vc_download` on its own only when the issue step has already happened out-of-band. " +
       "Explicit args override the environment: `holderPrivateKey` overrides HOLDER_PRIVATE_KEY; `issuerPrivateKey` overrides ISSUER_PRIVATE_KEY. " +
       "Set `isIssuer: true` when the issuer (not the holder) is downloading. " +
       "Maps to POST /cred/v1/vc/download.",
