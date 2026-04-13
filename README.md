@@ -147,12 +147,12 @@ auth. The keys in env are used for *outbound* BaaS calls only.
 | `ZETRIX_VC_PORT`        | no       | Port for HTTP transport (default `3000`).                                    |
 | `AWS_GATEWAY_API_KEY`   | yes\*    | Sent as `x-api-key`.                                                         |
 | `BAAS_API_KEY`          | yes\*    | Sent as `Authorization: Bearer <key>`.                                       |
-| `ISSUER_KEY`            | no       | Issuer public key. If omitted, derived from `ISSUER_PRIVATE_KEY`.            |
+| `ISSUER_KEY`            | no       | Issuer public identifier. Either a Zetrix address (`ZTX3…`) for display, or an encoded Ed25519 public key (`b001…`, 76 hex chars). Only the `b001…` form is usable for DID derivation / as a BaaS `publicKey` value; an address triggers derivation from `ISSUER_PRIVATE_KEY` instead. |
 | `ISSUER_PRIVATE_KEY`    | †        | Required for `zetrix_vc_issue` (unless passed per-call).                     |
-| `ISSUER_DID`            | no       | Issuer DID. If omitted, generated as `did:zid:<rawPubKey>` from `ISSUER_KEY` or `ISSUER_PRIVATE_KEY`. |
-| `HOLDER_KEY`            | no       | Holder public key. If omitted, derived from `HOLDER_PRIVATE_KEY`.            |
+| `ISSUER_DID`            | no       | Issuer DID. If omitted, generated as `did:zid:<rawPubKey>` from `ISSUER_KEY` (when `b001…`) or `ISSUER_PRIVATE_KEY`. |
+| `HOLDER_KEY`            | no       | Holder public identifier — address (`ZTX3…`) or encoded pubkey (`b001…`, 76 hex chars). Only the `b001…` form is used as an API `publicKey`; an address triggers derivation from `HOLDER_PRIVATE_KEY`. |
 | `HOLDER_PRIVATE_KEY`    | †        | Required for apply / download / VP flows (unless passed per-call).           |
-| `HOLDER_DID`            | no       | Holder DID. If omitted, generated as `did:zid:<rawPubKey>` from `HOLDER_KEY` or `HOLDER_PRIVATE_KEY`. |
+| `HOLDER_DID`            | no       | Holder DID. If omitted, generated as `did:zid:<rawPubKey>` from `HOLDER_KEY` (when `b001…`) or `HOLDER_PRIVATE_KEY`. |
 | `DEFAULT_TEMPLATE_ID`   | no       | Fallback `templateId` used by `zetrix_vc_apply` / `zetrix_vc_issue` when a caller omits it on a `data[]` item. |
 | `TDS_CONTRACT_ADDRESS`  | no       | Template Data Store contract address. Used by `zetrix_vc_get_template_detail`. |
 | `RCL_CONTRACT_ADDRESS`  | no       | Revocation Contract List address (reserved for revocation lookups).          |

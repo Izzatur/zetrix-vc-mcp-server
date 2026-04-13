@@ -261,7 +261,7 @@ export class ZetrixVcClient {
       return data as T;
     }
     throw new Error(
-      `Zetrix BaaS ${path} failed (HTTP ${status}): ${safeStringify(data)}`
+      `Zetrix BaaS ${path} failed (HTTP ${status}): ${summariseError(data)}`
     );
   }
 
@@ -270,13 +270,32 @@ export class ZetrixVcClient {
       const axErr = err as AxiosError;
       if (axErr.isAxiosError && axErr.response) {
         return new Error(
-          `Zetrix BaaS ${path} HTTP ${axErr.response.status}: ${safeStringify(axErr.response.data)}`
+          `Zetrix BaaS ${path} HTTP ${axErr.response.status}: ${summariseError(axErr.response.data)}`
         );
       }
       return err;
     }
     return new Error(String(err));
   }
+}
+
+/**
+ * Produce a short, human-readable summary from a response body. Detects the
+ * Cloudflare JS-challenge HTML and returns an actionable hint instead of
+ * dumping 500+ chars of raw markup into the error message.
+ */
+function summariseError(data: unknown): string {
+  if (typeof data === "string") {
+    const lower = data.toLowerCase();
+    if (lower.includes("just a moment") || lower.includes("cf-mitigated")) {
+      return (
+        "blocked by Cloudflare (JS challenge). Verify AWS_GATEWAY_API_KEY / BAAS_API_KEY " +
+          "are set and that your source IP / region isn't blocked by the gateway WAF."
+      );
+    }
+    return data.slice(0, 500);
+  }
+  return safeStringify(data).slice(0, 500);
 }
 
 function formatMessages(

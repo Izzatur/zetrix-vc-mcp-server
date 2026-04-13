@@ -79,11 +79,8 @@ export class ZetrixZidResolver {
     try {
       const resp = await this.http.get(path);
       if (resp.status < 200 || resp.status >= 300) {
-        const snippet = typeof resp.data === "string"
-          ? resp.data.slice(0, 500)
-          : JSON.stringify(resp.data).slice(0, 500);
         throw new Error(
-          `Zetrix ZID resolver ${path} failed (HTTP ${resp.status}): ${snippet}`
+          `Zetrix ZID resolver ${path} failed (HTTP ${resp.status}): ${summariseError(resp.data)}`
         );
       }
       return resp.data;
@@ -92,7 +89,7 @@ export class ZetrixZidResolver {
         const axErr = err as AxiosError;
         if (axErr.isAxiosError && axErr.response) {
           throw new Error(
-            `Zetrix ZID resolver ${path} HTTP ${axErr.response.status}: ${safeStringify(axErr.response.data)}`
+            `Zetrix ZID resolver ${path} HTTP ${axErr.response.status}: ${summariseError(axErr.response.data)}`
           );
         }
         throw err;
@@ -102,10 +99,20 @@ export class ZetrixZidResolver {
   }
 }
 
-function safeStringify(v: unknown): string {
+function summariseError(data: unknown): string {
+  if (typeof data === "string") {
+    const lower = data.toLowerCase();
+    if (lower.includes("just a moment") || lower.includes("cf-mitigated")) {
+      return (
+        "blocked by Cloudflare (JS challenge). Verify AWS_GATEWAY_API_KEY / BAAS_API_KEY " +
+          "are set and that your source IP / region isn't blocked by the gateway WAF."
+      );
+    }
+    return data.slice(0, 500);
+  }
   try {
-    return typeof v === "string" ? v : JSON.stringify(v);
+    return JSON.stringify(data).slice(0, 500);
   } catch {
-    return String(v);
+    return String(data).slice(0, 500);
   }
 }

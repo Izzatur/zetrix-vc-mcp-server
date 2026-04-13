@@ -44,7 +44,14 @@ import {
 
 const MCP_VERSION = "1.0.0";
 
-const ZETRIX_VC_NETWORK = (process.env.ZETRIX_VC_NETWORK || "uat") as ZetrixVcNetwork;
+const RAW_NETWORK = (process.env.ZETRIX_VC_NETWORK || "uat").trim().toLowerCase();
+if (RAW_NETWORK !== "uat" && RAW_NETWORK !== "prod") {
+  throw new Error(
+    `Invalid ZETRIX_VC_NETWORK="${RAW_NETWORK}". Must be "uat" or "prod". ` +
+      `(Note: this server is for the Zetrix BaaS — use ZETRIX_VC_NETWORK=uat for sandbox, prod for production.)`
+  );
+}
+const ZETRIX_VC_NETWORK: ZetrixVcNetwork = RAW_NETWORK;
 const ZETRIX_VC_BASE_URL = process.env.ZETRIX_VC_BASE_URL;
 const ZETRIX_VC_TRANSPORT = process.env.ZETRIX_VC_TRANSPORT || "stdio";
 const ZETRIX_VC_PORT = parseInt(process.env.ZETRIX_VC_PORT || "3000", 10);
@@ -97,19 +104,63 @@ const signer = new ZetrixVcSigner();
 // -------------------------------------------------------------------------
 
 /**
- * Return the first non-empty string from the given candidates.
+ * Return the first non-empty string from the given candidates, trimmed.
  *
  * Used to coalesce a tool argument with an environment fallback. Explicitly
  * passed arguments ALWAYS win when they are non-empty — even if the matching
  * env var is also set — so the caller can override the env per call. Empty
- * strings are treated as "not set" so that placeholder values in config
- * templates (e.g. `HOLDER_PRIVATE_KEY=""`) don't block resolution.
+ * or whitespace-only strings are treated as "not set" so that placeholder
+ * values in config templates (e.g. `HOLDER_PRIVATE_KEY=""`) don't block
+ * resolution. The return value is trimmed so that stray `\r` or surrounding
+ * whitespace (common from Windows files / EnvironmentFile) doesn't leak into
+ * signing / URL construction.
  */
 function pick(...candidates: Array<string | undefined | null>): string | undefined {
   for (const v of candidates) {
-    if (typeof v === "string" && v.trim() !== "") return v;
+    if (typeof v === "string") {
+      const trimmed = v.trim();
+      if (trimmed !== "") return trimmed;
+    }
   }
   return undefined;
+}
+
+/**
+ * Detect whether `candidate` looks like a Zetrix-encoded Ed25519 public key
+ * (76 hex chars starting with `b001`). If yes, return it trimmed+lowercased;
+ * otherwise return undefined so callers know to derive the pubkey from the
+ * private key instead. Handles the common user mistake of putting an address
+ * (`ZTX3...`) in HOLDER_KEY/ISSUER_KEY — those aren't usable as API pubkeys.
+ */
+function asEncodedEd25519PubKey(candidate: string | undefined): string | undefined {
+  const picked = pick(candidate);
+  if (!picked) return undefined;
+  const lower = picked.toLowerCase();
+  if (lower.length === 76 && lower.startsWith("b001") && /^[0-9a-f]+$/.test(lower)) {
+    return lower;
+  }
+  return undefined;
+}
+
+/**
+ * Resolve the encoded Ed25519 public key (`b001…` form) the BaaS API expects
+ * in `publicKey` / `ed25519PubKey` fields. Priority: explicit arg → env var
+ * (only when it's in the right format) → derive from the private key.
+ *
+ * `HOLDER_KEY` / `ISSUER_KEY` env vars may be addresses (`ZTX3…`) instead of
+ * encoded pubkeys — we detect that and fall through to key derivation so the
+ * API gets the correct format regardless of what the user put in those vars.
+ */
+async function resolveEncodedPublicKey(
+  argCandidate: string | undefined,
+  envCandidate: string | undefined,
+  privateKeyForDerivation: string
+): Promise<string> {
+  const arg = asEncodedEd25519PubKey(argCandidate);
+  if (arg) return arg;
+  const env = asEncodedEd25519PubKey(envCandidate);
+  if (env) return env;
+  return signer.getPublicKey(privateKeyForDerivation);
 }
 
 /**
@@ -155,7 +206,12 @@ async function generateDid(params: {
   const explicit = pick(params.didArg, params.didEnv);
   if (explicit) return explicit;
 
-  const pub = pick(params.publicKeyArg, params.publicKeyEnv);
+  // Only encoded pubkeys (b001…) are usable for DID derivation. HOLDER_KEY /
+  // ISSUER_KEY env values that are addresses (ZTX3…) are skipped so we fall
+  // through to deriving from the private key.
+  const pub =
+    asEncodedEd25519PubKey(params.publicKeyArg) ??
+    asEncodedEd25519PubKey(params.publicKeyEnv);
   if (pub) return deriveDidFromEncodedPublicKey(pub);
 
   const priv = pick(params.privateKeyArg, params.privateKeyEnv);
@@ -167,7 +223,8 @@ async function generateDid(params: {
   const ROLE = params.role === "holder" ? "HOLDER" : "ISSUER";
   throw new Error(
     `Missing ${params.role}Did. Provide ${params.role}Did (or ${ROLE}_DID env), ` +
-      `or supply ${params.role}PublicKey/${params.role}PrivateKey (or ${ROLE}_KEY/${ROLE}_PRIVATE_KEY env) so the DID can be derived as did:zid:<rawPubKey>.`
+      `or supply ${params.role}PublicKey (76-char b001… form) / ${params.role}PrivateKey ` +
+      `(or ${ROLE}_PRIVATE_KEY env) so the DID can be derived as did:zid:<rawPubKey>.`
   );
 }
 
@@ -177,17 +234,19 @@ async function generateDid(params: {
  * missing `templateId`, throw.
  */
 function applyDefaultTemplateId(data: TemplateMetadataDto[]): TemplateMetadataDto[] {
+  const fallback = pick(DEFAULT_TEMPLATE_ID);
   return data.map((item, idx) => {
-    if (item && typeof item.templateId === "string" && item.templateId.length > 0) {
-      return item;
-    }
-    if (!DEFAULT_TEMPLATE_ID) {
+    const itemTemplateId = pick(
+      typeof item?.templateId === "string" ? item.templateId : undefined
+    );
+    if (itemTemplateId) return { ...item, templateId: itemTemplateId };
+    if (!fallback) {
       throw new Error(
         `data[${idx}].templateId is missing and DEFAULT_TEMPLATE_ID is not set. ` +
           `Either include a templateId per item or configure DEFAULT_TEMPLATE_ID in the environment.`
       );
     }
-    return { ...item, templateId: DEFAULT_TEMPLATE_ID };
+    return { ...item, templateId: fallback };
   });
 }
 
@@ -812,17 +871,31 @@ function registerHandlers(server: Server) {
       switch (name) {
         case "zetrix_vc_version": {
           // Derive DIDs for diagnostics when possible (non-fatal if keys missing).
+          // Each derivation path is independently caught so a malformed pubkey
+          // doesn't block the private-key fallback.
           const safeDerive = async (priv?: string, pub?: string) => {
-            try {
-              if (pick(pub)) return deriveDidFromEncodedPublicKey(pub!);
-              if (pick(priv)) return await signer.getDid(priv!);
-            } catch {
-              /* ignore — diagnostics shouldn't fail */
+            const encodedPub = asEncodedEd25519PubKey(pub);
+            if (encodedPub) {
+              try {
+                return deriveDidFromEncodedPublicKey(encodedPub);
+              } catch {
+                /* fall through to private-key derivation */
+              }
+            }
+            const p = pick(priv);
+            if (p) {
+              try {
+                return await signer.getDid(p);
+              } catch {
+                /* diagnostics shouldn't fail — report null */
+              }
             }
             return null;
           };
-          const derivedHolderDid = HOLDER_DID ?? (await safeDerive(HOLDER_PRIVATE_KEY, HOLDER_KEY));
-          const derivedIssuerDid = ISSUER_DID ?? (await safeDerive(ISSUER_PRIVATE_KEY, ISSUER_KEY));
+          const derivedHolderDid =
+            pick(HOLDER_DID) ?? (await safeDerive(HOLDER_PRIVATE_KEY, HOLDER_KEY));
+          const derivedIssuerDid =
+            pick(ISSUER_DID) ?? (await safeDerive(ISSUER_PRIVATE_KEY, ISSUER_KEY));
 
           return toTextResult({
             name: "zetrix-vc-mcp-server",
@@ -862,57 +935,70 @@ function registerHandlers(server: Server) {
 
         case "zetrix_vc_generate_did": {
           const role = (args.role as "holder" | "issuer" | undefined) ?? "holder";
+
+          // Priority: all explicit args first (priv → pub → raw), then env
+          // fallbacks in the same order. HOLDER_KEY / ISSUER_KEY env vars that
+          // are actually addresses (ZTX3…) are skipped — only encoded pubkeys
+          // (b001…) are usable for DID derivation.
+          const privArg = pick(args.privateKey as string | undefined);
+          if (privArg) {
+            return toTextResult({ did: await signer.getDid(privArg), source: "privateKey" });
+          }
+          const pubArg = asEncodedEd25519PubKey(args.publicKey as string | undefined);
+          if (pubArg) {
+            return toTextResult({ did: deriveDidFromEncodedPublicKey(pubArg), source: "publicKey" });
+          }
           const rawArg = pick(args.rawPublicKey as string | undefined);
           if (rawArg) {
             if (!/^[0-9a-fA-F]{64}$/.test(rawArg)) {
               throw new Error(
-                `rawPublicKey must be 64 hex chars (32 bytes), got "${rawArg}".`
+                `rawPublicKey must be 64 hex chars (32 bytes), got length ${rawArg.length}.`
               );
             }
             return toTextResult({ did: `did:zid:${rawArg.toLowerCase()}`, source: "rawPublicKey" });
           }
 
-          const pubArg = pick(
-            args.publicKey as string | undefined,
-            role === "holder" ? HOLDER_KEY : ISSUER_KEY
-          );
-          if (pubArg) {
+          const envPriv = pick(role === "holder" ? HOLDER_PRIVATE_KEY : ISSUER_PRIVATE_KEY);
+          if (envPriv) {
             return toTextResult({
-              did: deriveDidFromEncodedPublicKey(pubArg),
-              source: args.publicKey ? "publicKey" : `${role === "holder" ? "HOLDER_KEY" : "ISSUER_KEY"} env`,
+              did: await signer.getDid(envPriv),
+              source: `${role === "holder" ? "HOLDER_PRIVATE_KEY" : "ISSUER_PRIVATE_KEY"} env`,
             });
           }
-
-          const privArg = pick(
-            args.privateKey as string | undefined,
-            role === "holder" ? HOLDER_PRIVATE_KEY : ISSUER_PRIVATE_KEY
-          );
-          if (privArg) {
-            const did = await signer.getDid(privArg);
+          const envPub = asEncodedEd25519PubKey(role === "holder" ? HOLDER_KEY : ISSUER_KEY);
+          if (envPub) {
             return toTextResult({
-              did,
-              source: args.privateKey
-                ? "privateKey"
-                : `${role === "holder" ? "HOLDER_PRIVATE_KEY" : "ISSUER_PRIVATE_KEY"} env`,
+              did: deriveDidFromEncodedPublicKey(envPub),
+              source: `${role === "holder" ? "HOLDER_KEY" : "ISSUER_KEY"} env`,
             });
           }
 
           throw new Error(
-            "No key provided. Pass `privateKey`, `publicKey`, or `rawPublicKey`, or set one of the " +
-              `${role === "holder" ? "HOLDER_" : "ISSUER_"}KEY / ${role === "holder" ? "HOLDER_" : "ISSUER_"}PRIVATE_KEY env vars.`
+            "No usable key provided. Pass `privateKey`, `publicKey` (76-char b001… form), or `rawPublicKey` (64 hex chars), " +
+              `or set ${role === "holder" ? "HOLDER_PRIVATE_KEY" : "ISSUER_PRIVATE_KEY"} env var. ` +
+              `(${role === "holder" ? "HOLDER_KEY" : "ISSUER_KEY"} env is only used when it's a b001… encoded pubkey; addresses like ZTX3… don't carry pubkey info.)`
           );
         }
 
         case "zetrix_vc_resolve_did": {
           // If the caller didn't pass a DID, generate it from the holder role
           // (most common case when user asks "show me my DID document / permissions").
-          const did = pick(args.did as string | undefined) ??
-            (await generateDid({
-              role: "holder",
-              didEnv: HOLDER_DID,
-              publicKeyEnv: HOLDER_KEY,
-              privateKeyEnv: HOLDER_PRIVATE_KEY,
-            }));
+          let did = pick(args.did as string | undefined);
+          if (!did) {
+            try {
+              did = await generateDid({
+                role: "holder",
+                didEnv: HOLDER_DID,
+                publicKeyEnv: HOLDER_KEY,
+                privateKeyEnv: HOLDER_PRIVATE_KEY,
+              });
+            } catch {
+              throw new Error(
+                "No DID to resolve. Pass `did` (e.g. did:zid:…), or configure HOLDER_DID / HOLDER_PRIVATE_KEY " +
+                  "so the holder's DID can be generated automatically."
+              );
+            }
+          }
           const doc = await zidResolver.resolve(did);
           return toTextResult({
             did,
@@ -998,9 +1084,11 @@ function registerHandlers(server: Server) {
             "HOLDER_PRIVATE_KEY",
             args.holderPrivateKey as string | undefined
           );
-          const holderPublicKey =
-            pick(args.holderPublicKey as string | undefined, HOLDER_KEY) ??
-            (await signer.getPublicKey(holderPrivateKey));
+          const holderPublicKey = await resolveEncodedPublicKey(
+            args.holderPublicKey as string | undefined,
+            HOLDER_KEY,
+            holderPrivateKey
+          );
           const issuerPrivateKey = requireEnv(
             ISSUER_PRIVATE_KEY,
             "ISSUER_PRIVATE_KEY",
@@ -1091,14 +1179,18 @@ function registerHandlers(server: Server) {
           }
           const data = applyDefaultTemplateId(rawData);
           // Explicit args override env vars (HOLDER_PRIVATE_KEY / HOLDER_KEY).
+          // HOLDER_KEY is ignored unless it's an encoded (b001…) pubkey — if
+          // it's an address, we derive the pubkey from the private key.
           const holderPrivateKey = requireEnv(
             HOLDER_PRIVATE_KEY,
             "HOLDER_PRIVATE_KEY",
             args.holderPrivateKey as string | undefined
           );
-          const holderPublicKey =
-            pick(args.holderPublicKey as string | undefined, HOLDER_KEY) ??
-            (await signer.getPublicKey(holderPrivateKey));
+          const holderPublicKey = await resolveEncodedPublicKey(
+            args.holderPublicKey as string | undefined,
+            HOLDER_KEY,
+            holderPrivateKey
+          );
 
           // Sign the canonicalised `data` payload; server re-canonicalises to verify.
           const signPayload = stableStringify({ data });
@@ -1150,16 +1242,17 @@ function registerHandlers(server: Server) {
           if (!vcId) throw new Error("`vcId` is required.");
           const isIssuer = Boolean(args.isIssuer);
 
-          let signVcId = args.signVcId as string | undefined;
+          let signVcId = pick(args.signVcId as string | undefined);
           if (!signVcId) {
             // Explicit args override env. Prefer the role-specific arg name
             // (issuerPrivateKey when isIssuer=true, holderPrivateKey otherwise)
             // but also accept the generic signerPrivateKey for either role.
-            const argSigner =
-              (args.signerPrivateKey as string | undefined) ??
-              (isIssuer
+            const argSigner = pick(
+              args.signerPrivateKey as string | undefined,
+              isIssuer
                 ? (args.issuerPrivateKey as string | undefined)
-                : (args.holderPrivateKey as string | undefined));
+                : (args.holderPrivateKey as string | undefined)
+            );
             const privateKey = requireEnv(
               isIssuer ? ISSUER_PRIVATE_KEY : HOLDER_PRIVATE_KEY,
               isIssuer ? "ISSUER_PRIVATE_KEY" : "HOLDER_PRIVATE_KEY",
@@ -1177,11 +1270,14 @@ function registerHandlers(server: Server) {
           const vc = args.vc as VerifiableCredential | undefined;
           if (!vc) throw new Error("`vc` is required.");
 
-          // Explicit arg wins over HOLDER_KEY; falls back to deriving from
-          // HOLDER_PRIVATE_KEY if neither is set.
-          let ed25519PubKey = pick(args.ed25519PubKey as string | undefined, HOLDER_KEY);
-          if (!ed25519PubKey && pick(HOLDER_PRIVATE_KEY)) {
-            ed25519PubKey = await signer.getPublicKey(HOLDER_PRIVATE_KEY!);
+          // Resolve the encoded pubkey from arg → HOLDER_KEY (only if encoded)
+          // → derive from HOLDER_PRIVATE_KEY. Address-form HOLDER_KEY is skipped.
+          let ed25519PubKey: string | undefined =
+            asEncodedEd25519PubKey(args.ed25519PubKey as string | undefined) ??
+            asEncodedEd25519PubKey(HOLDER_KEY);
+          const envPriv = pick(HOLDER_PRIVATE_KEY);
+          if (!ed25519PubKey && envPriv) {
+            ed25519PubKey = await signer.getPublicKey(envPriv);
           }
 
           const resp = await vcClient.createVp({
@@ -1199,8 +1295,11 @@ function registerHandlers(server: Server) {
           if (!blobId) throw new Error("`blobId` is required.");
 
           let signData = pick(args.ed25519SignData as string | undefined);
-          // Explicit ed25519PubKey arg always overrides HOLDER_KEY env var.
-          let ed25519PubKey = pick(args.ed25519PubKey as string | undefined, HOLDER_KEY);
+          // Explicit ed25519PubKey arg always overrides HOLDER_KEY env var; env
+          // HOLDER_KEY is only accepted when it's an encoded (b001…) pubkey.
+          let ed25519PubKey: string | undefined =
+            asEncodedEd25519PubKey(args.ed25519PubKey as string | undefined) ??
+            asEncodedEd25519PubKey(HOLDER_KEY);
 
           if (!signData) {
             const blob = pick(args.blob as string | undefined);
@@ -1217,8 +1316,9 @@ function registerHandlers(server: Server) {
             const sig = await signer.sign(blob, holderPrivateKey);
             signData = sig.signData;
             if (!ed25519PubKey) ed25519PubKey = sig.publicKey;
-          } else if (!ed25519PubKey && pick(HOLDER_PRIVATE_KEY)) {
-            ed25519PubKey = await signer.getPublicKey(HOLDER_PRIVATE_KEY!);
+          } else if (!ed25519PubKey) {
+            const envPriv = pick(HOLDER_PRIVATE_KEY);
+            if (envPriv) ed25519PubKey = await signer.getPublicKey(envPriv);
           }
 
           if (!ed25519PubKey) {
@@ -1244,9 +1344,11 @@ function registerHandlers(server: Server) {
             "HOLDER_PRIVATE_KEY",
             args.holderPrivateKey as string | undefined
           );
-          const ed25519PubKey =
-            pick(args.ed25519PubKey as string | undefined, HOLDER_KEY) ??
-            (await signer.getPublicKey(holderPrivateKey));
+          const ed25519PubKey = await resolveEncodedPublicKey(
+            args.ed25519PubKey as string | undefined,
+            HOLDER_KEY,
+            holderPrivateKey
+          );
 
           // 1. Create the VP blob
           const created = await vcClient.createVp({
