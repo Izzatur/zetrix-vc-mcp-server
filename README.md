@@ -40,42 +40,211 @@ npm install
 npm run build
 ```
 
-Run locally (stdio transport, for MCP clients):
+The build step is required — the MCP server runs from `dist/index.js`.
+
+## Running the Server
+
+The server supports two transports. **Where the env vars live depends on
+which you pick** — see [Environment Variables](#environment-variables) below.
+
+### Option 1 — stdio transport (recommended for single-user / desktop clients)
+
+With stdio, the **MCP client spawns the server as a child process** every time
+it connects. You don't run the server yourself — the client does. Just build
+once and point your client config at `dist/index.js`.
 
 ```bash
-npm start
+npm start                    # manual run, for smoke-testing only
 ```
 
-Run in HTTP mode (Streamable HTTP transport on `http://localhost:3000/mcp`):
+For real use, register it with your MCP client using one of the config files in
+[`configs/`](configs/):
+
+- `mcp-config-uat.json` — connects to `https://api-sandbox.zetrix.com`
+- `mcp-config-prod.json` — connects to `https://api.zetrix.com`
+
+Both set `env` on the client side — see [Placing env vars](#placing-env-vars)
+for what lands where.
+
+### Option 2 — HTTP transport (recommended for shared / remote deployments)
+
+With HTTP, you start the server **once, yourself**, and clients connect to a
+URL. Secrets live on the **server** side.
 
 ```bash
+# foreground
 npm run start:http
+
+# or with explicit env (no .env file — see "Placing env vars" below)
+ZETRIX_VC_TRANSPORT=http \
+ZETRIX_VC_PORT=3000 \
+ZETRIX_VC_NETWORK=uat \
+AWS_GATEWAY_API_KEY=your-aws-key \
+BAAS_API_KEY=your-baas-key \
+HOLDER_PRIVATE_KEY=... \
+ISSUER_PRIVATE_KEY=... \
+node dist/index.js
 ```
 
-## Configuration (environment variables)
+On startup you'll see:
 
-Copy `.env.example` to `.env` (or set these in your MCP client's `env` block):
+```
+Zetrix VC MCP Server running on http://localhost:3000/mcp (network=uat, baseUrl=https://api-sandbox.zetrix.com)
+```
+
+Endpoints:
+
+| Path     | Method | Purpose                                                  |
+|----------|--------|----------------------------------------------------------|
+| `/health`| GET    | Status JSON (version, network, base URL, active sessions)|
+| `/mcp`   | POST   | MCP Streamable HTTP — all JSON-RPC traffic               |
+
+Verify it's up:
+
+```bash
+curl -s http://localhost:3000/health | jq .
+```
+
+Register it with an MCP client by URL (no `env` block needed client-side):
+
+```bash
+# Claude Code
+claude mcp add --transport http zetrix-vc-uat http://localhost:3000/mcp
+```
+
+Or in a client config:
+
+```json
+{ "mcpServers": { "zetrix-vc-uat": { "type": "http", "url": "http://localhost:3000/mcp" } } }
+```
+
+⚠️ `/mcp` has **no built-in authentication** — don't expose it on the public
+internet without a reverse proxy (nginx/Caddy) terminating TLS and enforcing
+auth. The keys in env are used for *outbound* BaaS calls only.
+
+## Environment Variables
 
 | Variable                | Required | Description                                                                 |
 |-------------------------|----------|-----------------------------------------------------------------------------|
-| `ZETRIX_VC_NETWORK`     | no       | `uat` (default) or `prod` — selects the base URL.                            |
-| `ZETRIX_VC_BASE_URL`    | no       | Explicit base URL override.                                                  |
+| `ZETRIX_VC_NETWORK`     | no       | `uat` (default) or `prod` — selects the BaaS base URL.                       |
+| `ZETRIX_VC_BASE_URL`    | no       | Explicit BaaS base URL override.                                             |
 | `ZETRIX_VC_TRANSPORT`   | no       | `stdio` (default) or `http`.                                                 |
 | `ZETRIX_VC_PORT`        | no       | Port for HTTP transport (default `3000`).                                    |
 | `AWS_GATEWAY_API_KEY`   | yes\*    | Sent as `x-api-key`.                                                         |
 | `BAAS_API_KEY`          | yes\*    | Sent as `Authorization: Bearer <key>`.                                       |
-| `ISSUER_KEY`            | no       | Issuer public key (informational).                                           |
+| `ISSUER_KEY`            | no       | Issuer public key (informational / diagnostics only).                        |
 | `ISSUER_PRIVATE_KEY`    | †        | Required for `zetrix_vc_issue` (unless passed per-call).                     |
 | `HOLDER_KEY`            | no       | Holder public key. If omitted, derived from `HOLDER_PRIVATE_KEY`.            |
-| `HOLDER_PRIVATE_KEY`    | †        | Required for apply / download / VP flows (unless passed per-call).          |
+| `HOLDER_PRIVATE_KEY`    | †        | Required for apply / download / VP flows (unless passed per-call).           |
 | `DEFAULT_TEMPLATE_ID`   | no       | Fallback `templateId` used by `zetrix_vc_apply` / `zetrix_vc_issue` when a caller omits it on a `data[]` item. |
 | `TDS_CONTRACT_ADDRESS`  | no       | Template Data Store contract address. Used by `zetrix_vc_get_template_detail`. |
-| `RCL_CONTRACT_ADDRESS`  | no       | Revocation Contract List address (reserved for revocation lookups). |
+| `RCL_CONTRACT_ADDRESS`  | no       | Revocation Contract List address (reserved for revocation lookups).          |
 | `ZETRIX_NODE_BASE_URL`  | no       | Override for the node RPC. Defaults by network: uat → `https://test-node.zetrix.com`, prod → `https://node.zetrix.com`. |
 
 \* Required whenever the Zetrix BaaS gateway enforces the keys.
 † Private keys may alternatively be passed as tool arguments to avoid storing
 them in the environment.
+
+### Placing env vars
+
+**The env vars must live where the server *process* runs.** That's a different
+place depending on transport:
+
+| Transport | Who starts the server?    | Where do env vars live?                                  |
+|-----------|---------------------------|----------------------------------------------------------|
+| stdio     | The MCP client, per call  | **Client-side config** — in the `env` block of `mcp-config-*.json` |
+| http      | You, once                 | **Server-side** — shell env / systemd unit / `.env` / container env |
+
+#### stdio — client-side config
+
+The server is launched on demand by the client; it has no persistent `.env`.
+Put the keys in the `env` block of your client's MCP config. Examples:
+
+- Claude Desktop: `~/Library/Application Support/Claude/claude_desktop_config.json` (mac), `%APPDATA%\Claude\claude_desktop_config.json` (win)
+- Claude Code: `~/.claude.json`
+- Cursor: `~/.cursor/mcp.json`
+
+Use [`configs/mcp-config-uat.json`](configs/mcp-config-uat.json) or
+[`configs/mcp-config-prod.json`](configs/mcp-config-prod.json) as a template
+— copy the `mcpServers` block into your client config and fill in values:
+
+```json
+{
+  "mcpServers": {
+    "zetrix-vc-uat": {
+      "command": "node",
+      "args": ["/absolute/path/to/zetrix-vc-mcp-server/dist/index.js"],
+      "env": {
+        "ZETRIX_VC_NETWORK": "uat",
+        "AWS_GATEWAY_API_KEY": "...",
+        "BAAS_API_KEY": "...",
+        "HOLDER_PRIVATE_KEY": "...",
+        "ISSUER_PRIVATE_KEY": "...",
+        "DEFAULT_TEMPLATE_ID": "did:zid:...",
+        "TDS_CONTRACT_ADDRESS": "ZTX..."
+      }
+    }
+  }
+}
+```
+
+A `.env` file in this repo is **not read** in stdio mode.
+
+#### http — server-side
+
+The server runs as a long-lived process that you start yourself. Pick any of:
+
+**1. Inline on the command line (easiest for testing):**
+
+```bash
+ZETRIX_VC_TRANSPORT=http AWS_GATEWAY_API_KEY=... BAAS_API_KEY=... \
+HOLDER_PRIVATE_KEY=... ISSUER_PRIVATE_KEY=... node dist/index.js
+```
+
+**2. `.env` file + shell export (dev loop):**
+
+Copy the template and fill in values:
+
+```bash
+cp .env.example .env
+# edit .env
+set -a; source .env; set +a     # export every line into the shell
+npm run start:http
+```
+
+The server itself does **not** auto-load `.env` — you must export it before
+running node. (Ask if you'd like `dotenv` wired up so `node dist/index.js`
+reads `.env` automatically.)
+
+**3. systemd unit (production):**
+
+```ini
+# /etc/systemd/system/zetrix-vc-mcp.service
+[Unit]
+Description=Zetrix VC MCP Server
+After=network.target
+
+[Service]
+Type=simple
+User=armmarov
+WorkingDirectory=/home/armmarov/work/projects/zetrix-vc-mcp-server
+EnvironmentFile=/home/armmarov/work/projects/zetrix-vc-mcp-server/.env
+Environment=ZETRIX_VC_TRANSPORT=http
+Environment=ZETRIX_VC_PORT=3000
+ExecStart=/usr/bin/node dist/index.js
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now zetrix-vc-mcp
+journalctl -u zetrix-vc-mcp -f     # tail logs
+```
+
+**4. Docker / container env:** pass env vars via `-e` flags or a compose file.
 
 ### Override semantics
 
@@ -91,17 +260,6 @@ explicit arg.
 | `ISSUER_PRIVATE_KEY`   | `issuerPrivateKey` (issue / download with `isIssuer:true`) |
 | `TDS_CONTRACT_ADDRESS` | `tdsContractAddress` (get_template_detail)        |
 | `DEFAULT_TEMPLATE_ID`  | `templateId` on each `data[]` item, or top-level on get_template_detail |
-
-## MCP Client Configuration
-
-Examples under [`configs/`](configs/):
-
-- `mcp-config-uat.json` — connects to `https://api-sandbox.zetrix.com`
-- `mcp-config-prod.json` — connects to `https://api.zetrix.com`
-
-Update the `args` path to point at your built `dist/index.js` and fill in the
-env keys, then register the config with your MCP client (e.g. Claude Desktop,
-Claude Code, Cursor).
 
 ## How signing works
 
