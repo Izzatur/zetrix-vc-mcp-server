@@ -197,6 +197,38 @@ function requireEnv(value: string | undefined, name: string, arg?: string): stri
 }
 
 /**
+ * Normalise a user-supplied identifier into a canonical Zetrix DID
+ * (`did:zid:<rawPubKey>`). Accepts several plausible forms:
+ *   - `did:zid:<64-hex>`  → returned as-is
+ *   - `<64-hex>`          → prefixed with `did:zid:`
+ *   - `b001…<76-hex>`     → stripped + prefixed
+ *   - `ZTX3…` address     → REJECTED with a clear error (addresses can't be
+ *                           reversed into a pubkey locally; the BaaS expects
+ *                           the DID form)
+ *
+ * Used when the caller has supplied `holderDid` / `HOLDER_DID` (or the
+ * issuer equivalent) explicitly — we want to ensure whatever we send
+ * outbound is in the `did:zid:` form the BaaS expects.
+ */
+function normaliseZetrixDid(value: string, role: "holder" | "issuer"): string {
+  const v = value.trim();
+  if (v.startsWith("did:zid:")) return v.toLowerCase();
+  if (/^[0-9a-fA-F]{64}$/.test(v)) return `did:zid:${v.toLowerCase()}`;
+  const enc = asEncodedEd25519PubKey(v);
+  if (enc) return deriveDidFromEncodedPublicKey(enc);
+  if (/^ZTX[A-Za-z0-9]+$/.test(v)) {
+    throw new Error(
+      `${role}Did cannot be a Zetrix address (${v}). The BaaS expects the DID form 'did:zid:<rawPubKey>'. ` +
+        `Either set ${role}Did to 'did:zid:...', or let the tool derive it by providing ${role}PublicKey (b001… form) or ${role}PrivateKey — ` +
+        `a ZTX3 address cannot be reversed into a public key locally.`
+    );
+  }
+  throw new Error(
+    `Cannot interpret ${role}Did "${v}". Expected 'did:zid:<rawPubKey>' or an encoded/raw public key.`
+  );
+}
+
+/**
  * Generate (i.e. derive locally) a Zetrix DID for the holder or issuer role
  * from the strongest available source:
  *   1. explicit `didArg` argument                     (tool arg override)
@@ -222,8 +254,11 @@ async function generateDid(params: {
   privateKeyArg?: string;
   privateKeyEnv?: string;
 }): Promise<string> {
+  // Normalise any explicit DID — if someone put a ZTX3 address in
+  // HOLDER_DID by mistake, this throws loudly with guidance instead of
+  // silently sending the wrong format to the BaaS.
   const explicit = pick(params.didArg, params.didEnv);
-  if (explicit) return explicit;
+  if (explicit) return normaliseZetrixDid(explicit, params.role);
 
   // Only encoded pubkeys (b001…) are usable for DID derivation. HOLDER_KEY /
   // ISSUER_KEY env values that are addresses (ZTX3…) are skipped so we fall
