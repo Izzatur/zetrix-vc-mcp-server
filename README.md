@@ -32,6 +32,13 @@ Plus:
 - `zetrix_vc_get_template_detail` — fetches a template record from the on-chain
   TDS contract via `GET <NODE>/getAccountMetaData?address=<TDS_CONTRACT_ADDRESS>&key=template__<templateId>`.
   Falls back to `DEFAULT_TEMPLATE_ID` / `TDS_CONTRACT_ADDRESS` when args omitted.
+- `zetrix_vc_request_credential` — **one-shot issuance flow**. Fetches the
+  template from TDS, validates `metadata` against the required attributes in
+  `applyFormat`, then runs apply → issue → download and returns the final W3C
+  JSON-LD `VerifiableCredential`. If any mandatory attribute is missing, the
+  tool returns an error listing the missing keys (with their human-readable
+  names) so the agent can ask the user for them and retry. Use this when the
+  user says "issue me a VC" / "give me a credential".
 
 ## Install & Build
 
@@ -136,6 +143,7 @@ auth. The keys in env are used for *outbound* BaaS calls only.
 | `ISSUER_PRIVATE_KEY`    | †        | Required for `zetrix_vc_issue` (unless passed per-call).                     |
 | `HOLDER_KEY`            | no       | Holder public key. If omitted, derived from `HOLDER_PRIVATE_KEY`.            |
 | `HOLDER_PRIVATE_KEY`    | †        | Required for apply / download / VP flows (unless passed per-call).           |
+| `HOLDER_DID`            | †        | Holder DID/ZID (e.g. `did:zid:ztx…`). Used by `zetrix_vc_issue` and `zetrix_vc_request_credential` (unless passed per-call). |
 | `DEFAULT_TEMPLATE_ID`   | no       | Fallback `templateId` used by `zetrix_vc_apply` / `zetrix_vc_issue` when a caller omits it on a `data[]` item. |
 | `TDS_CONTRACT_ADDRESS`  | no       | Template Data Store contract address. Used by `zetrix_vc_get_template_detail`. |
 | `RCL_CONTRACT_ADDRESS`  | no       | Revocation Contract List address (reserved for revocation lookups).          |
@@ -255,9 +263,10 @@ explicit arg.
 
 | Env var                | Overriding tool arg                                |
 |------------------------|----------------------------------------------------|
-| `HOLDER_PRIVATE_KEY`   | `holderPrivateKey` (apply / download / vp_*)      |
-| `HOLDER_KEY`           | `holderPublicKey` (apply), `ed25519PubKey` (vp_*) |
-| `ISSUER_PRIVATE_KEY`   | `issuerPrivateKey` (issue / download with `isIssuer:true`) |
+| `HOLDER_PRIVATE_KEY`   | `holderPrivateKey` (apply / download / vp_* / request_credential) |
+| `HOLDER_KEY`           | `holderPublicKey` (apply / request_credential), `ed25519PubKey` (vp_*) |
+| `HOLDER_DID`           | `holderDid` (issue / request_credential)          |
+| `ISSUER_PRIVATE_KEY`   | `issuerPrivateKey` (issue / download with `isIssuer:true` / request_credential) |
 | `TDS_CONTRACT_ADDRESS` | `tdsContractAddress` (get_template_detail)        |
 | `DEFAULT_TEMPLATE_ID`  | `templateId` on each `data[]` item, or top-level on get_template_detail |
 
@@ -274,6 +283,55 @@ sign canonicalised payloads:
 
 If you'd rather sign externally and submit the signature, every tool accepts
 pre-computed signature fields (`signData` / `ed25519SignData` / `signVcId`).
+
+## One-shot issuance — `zetrix_vc_request_credential`
+
+When the user says *"issue me a driving-license credential"*, call this tool
+and let it handle the template lookup, attribute validation, apply, issue and
+download:
+
+```json
+// Agent first call — probe for required attributes
+{
+  "name": "zetrix_vc_request_credential",
+  "arguments": { "metadata": {} }
+}
+```
+
+Response (error with the required-attribute list):
+
+```
+Cannot issue VC — template "DrivingLicense" requires these attributes that are missing or empty in `metadata`:
+  - name (Name, String)
+  - icNo (IC Number, String)
+  - class (Class, String)
+  - issueDate (License Issue Date, String)
+  - expiryDate (License Expiry Date, String)
+  - address (Address, String)
+  - nationality (Nationality, String)
+```
+
+After gathering the values from the user, retry with them filled in:
+
+```json
+{
+  "name": "zetrix_vc_request_credential",
+  "arguments": {
+    "metadata": {
+      "name": "Ahmad bin Abdullah",
+      "icNo": "900101-01-1234",
+      "class": "D",
+      "issueDate": "2020-01-01",
+      "expiryDate": "2030-01-01",
+      "address": "Kuala Lumpur",
+      "nationality": "Malaysian"
+    }
+  }
+}
+```
+
+Response returns the final W3C JSON-LD VerifiableCredential plus wallet-pass
+images (`vcPassBase64`) and the vcId from the apply step.
 
 ## End-to-end example
 

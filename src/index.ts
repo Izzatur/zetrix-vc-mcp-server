@@ -48,6 +48,7 @@ const ISSUER_KEY = process.env.ISSUER_KEY;
 const ISSUER_PRIVATE_KEY = process.env.ISSUER_PRIVATE_KEY;
 const HOLDER_KEY = process.env.HOLDER_KEY;
 const HOLDER_PRIVATE_KEY = process.env.HOLDER_PRIVATE_KEY;
+const HOLDER_DID = process.env.HOLDER_DID;
 
 const DEFAULT_TEMPLATE_ID = process.env.DEFAULT_TEMPLATE_ID;
 
@@ -126,6 +127,67 @@ function applyDefaultTemplateId(data: TemplateMetadataDto[]): TemplateMetadataDt
   });
 }
 
+/**
+ * A single attribute spec entry inside a TDS template's `applyFormat`.
+ * Shape (observed on-chain):
+ *   { attribute: "Name", format: "String", key: "name", mandatory: 1, type: 3 }
+ */
+interface TemplateAttributeSpec {
+  attribute: string;
+  format: string;
+  key: string;
+  mandatory: number | boolean;
+  type?: number;
+}
+
+interface TemplateInfo {
+  templateName?: string;
+  applyFormat: TemplateAttributeSpec[];
+}
+
+/**
+ * Extract the `applyFormat` schema from a template record pulled from the TDS
+ * contract. Returns `null` when the record has no applyFormat (e.g. legacy
+ * templates without validation metadata) so validation becomes best-effort.
+ */
+function extractTemplateInfo(templateValue: unknown): TemplateInfo | null {
+  if (!templateValue || typeof templateValue !== "object") return null;
+  const v = templateValue as Record<string, unknown>;
+  const applyFormat = v.applyFormat;
+  if (!Array.isArray(applyFormat)) return null;
+  const specs: TemplateAttributeSpec[] = applyFormat
+    .filter((s): s is Record<string, unknown> => !!s && typeof s === "object")
+    .map((s) => ({
+      attribute: String(s.attribute ?? ""),
+      format: String(s.format ?? ""),
+      key: String(s.key ?? ""),
+      mandatory: (s.mandatory as number | boolean) ?? 0,
+      type: typeof s.type === "number" ? s.type : undefined,
+    }))
+    .filter((s) => s.key);
+  return {
+    templateName: typeof v.templateName === "string" ? v.templateName : undefined,
+    applyFormat: specs,
+  };
+}
+
+/**
+ * Check a metadata object against a template's applyFormat and return the list
+ * of mandatory attributes that are missing or empty. Mandatory is truthy when
+ * `mandatory === 1 || mandatory === true`.
+ */
+function findMissingRequiredAttributes(
+  metadata: Record<string, unknown>,
+  info: TemplateInfo
+): TemplateAttributeSpec[] {
+  return info.applyFormat.filter((spec) => {
+    const isMandatory = spec.mandatory === 1 || spec.mandatory === true;
+    if (!isMandatory) return false;
+    const value = metadata[spec.key];
+    return value === undefined || value === null || value === "";
+  });
+}
+
 function toTextResult(payload: unknown) {
   return {
     content: [
@@ -182,6 +244,84 @@ const tools: Tool[] = [
         },
       },
       required: [],
+    },
+  },
+
+  // --------------------- VC: Full flow (apply + issue + download) ---------------------
+  {
+    name: "zetrix_vc_request_credential",
+    description:
+      "High-level tool to issue a Verifiable Credential end-to-end in one call. Runs the full flow: " +
+      "(1) fetches the template record from the on-chain TDS contract to learn the required attributes, " +
+      "(2) validates `metadata` contains every mandatory attribute — if any are missing, returns an error " +
+      "listing them so the agent can ask the user for the values before retrying, " +
+      "(3) holder applies for the VC (POST /v1/vc/apply), " +
+      "(4) issuer issues the VC to `holderDid` (POST /v1/vc/issue), " +
+      "(5) holder downloads the final signed VC (POST /v1/vc/download), and " +
+      "(6) returns the W3C JSON-LD VerifiableCredential. " +
+      "Use this when the user asks 'issue me a VC' / 'give me a credential' — it hides the multi-step " +
+      "orchestration. Env fallbacks: templateId → DEFAULT_TEMPLATE_ID, holderDid → HOLDER_DID, " +
+      "tdsContractAddress → TDS_CONTRACT_ADDRESS, keys → HOLDER_/ISSUER_ env vars. Explicit args override env.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        metadata: {
+          type: "object",
+          description:
+            "Key/value claims that populate the VC. Keys must match the template's `applyFormat[].key` " +
+            "(e.g. `name`, `icNo`, `class`). The tool will fetch the template on-chain and validate that " +
+            "every mandatory attribute is present — if any are missing, the error response will list them " +
+            "so you can ask the user for the values.",
+          additionalProperties: true,
+        },
+        templateId: {
+          type: "string",
+          description:
+            "Template id (e.g. did:zid:...). Overrides DEFAULT_TEMPLATE_ID env var when provided.",
+        },
+        holderDid: {
+          type: "string",
+          description:
+            "Holder DID/ZID the VC is issued to (e.g. did:zid:ztx...). Overrides HOLDER_DID env var when provided.",
+        },
+        tdsContractAddress: {
+          type: "string",
+          description:
+            "TDS contract address for the template lookup. Overrides TDS_CONTRACT_ADDRESS env var when provided.",
+        },
+        passDesignId: {
+          type: "string",
+          description: "Optional pass design identifier attached to the credential.",
+        },
+        issuanceDate: { type: "string", description: "ISO-8601 issuance date (optional)." },
+        expirationDate: { type: "string", description: "ISO-8601 expiration date (optional)." },
+        validFrom: { type: "string", description: "ISO-8601 validity start (optional)." },
+        validUntil: { type: "string", description: "ISO-8601 validity end (optional)." },
+        keyExpiry: { type: "number", description: "Key expiry (default 0)." },
+        skipTemplateValidation: {
+          type: "boolean",
+          description:
+            "Set to true to skip fetching the template and validating required attributes (useful when the TDS lookup is unavailable). Default false.",
+        },
+        skipDownload: {
+          type: "boolean",
+          description:
+            "Set to true to return the VC from the issue step and skip the final download call. Default false.",
+        },
+        holderPrivateKey: {
+          type: "string",
+          description: "Holder Ed25519 private key. Overrides HOLDER_PRIVATE_KEY env var when provided.",
+        },
+        holderPublicKey: {
+          type: "string",
+          description: "Holder Ed25519 public key. Overrides HOLDER_KEY env var when provided; otherwise derived from the private key.",
+        },
+        issuerPrivateKey: {
+          type: "string",
+          description: "Issuer Ed25519 private key. Overrides ISSUER_PRIVATE_KEY env var when provided.",
+        },
+      },
+      required: ["metadata"],
     },
   },
 
@@ -550,6 +690,7 @@ function registerHandlers(server: Server) {
               issuerPrivateKey: ISSUER_PRIVATE_KEY ? "set" : "missing",
               holderKey: HOLDER_KEY ? "set" : "missing",
               holderPrivateKey: HOLDER_PRIVATE_KEY ? "set" : "missing",
+              holderDid: HOLDER_DID ?? null,
             },
             defaults: {
               templateId: DEFAULT_TEMPLATE_ID ?? null,
@@ -578,6 +719,150 @@ function registerHandlers(server: Server) {
           );
           const detail = await nodeClient.getTemplateDetail(tdsContractAddress, templateId);
           return toTextResult(detail);
+        }
+
+        case "zetrix_vc_request_credential": {
+          const metadata = args.metadata as Record<string, unknown> | undefined;
+          if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
+            throw new Error("`metadata` must be an object of claim key/values.");
+          }
+
+          const templateId = requireEnv(
+            DEFAULT_TEMPLATE_ID,
+            "templateId (or DEFAULT_TEMPLATE_ID)",
+            args.templateId as string | undefined
+          );
+          const holderDid = requireEnv(
+            HOLDER_DID,
+            "holderDid (or HOLDER_DID)",
+            args.holderDid as string | undefined
+          );
+          const skipTemplateValidation = args.skipTemplateValidation === true;
+          const skipDownload = args.skipDownload === true;
+
+          // ----- 1. Validate required attributes against on-chain template -----
+          let templateName: string | undefined;
+          if (!skipTemplateValidation) {
+            const tdsContractAddress = requireEnv(
+              TDS_CONTRACT_ADDRESS,
+              "tdsContractAddress (or TDS_CONTRACT_ADDRESS)",
+              args.tdsContractAddress as string | undefined
+            );
+            const template = await nodeClient.getTemplateDetail(tdsContractAddress, templateId);
+            if (!template.found) {
+              throw new Error(
+                `Template "${templateId}" was not found on TDS contract ${tdsContractAddress}. ` +
+                  `Check the templateId / TDS_CONTRACT_ADDRESS, or pass skipTemplateValidation: true to proceed without the on-chain check.`
+              );
+            }
+            const info = extractTemplateInfo(template.value);
+            if (info) {
+              templateName = info.templateName;
+              const missing = findMissingRequiredAttributes(metadata, info);
+              if (missing.length > 0) {
+                const list = missing
+                  .map((m) => `  - ${m.key} (${m.attribute}, ${m.format})`)
+                  .join("\n");
+                throw new Error(
+                  `Cannot issue VC — template "${templateName ?? templateId}" requires these attributes that are missing or empty in \`metadata\`:\n` +
+                    `${list}\n\n` +
+                    `Ask the user for these values and retry with them included in \`metadata\` (use the \`key\` names shown above).`
+                );
+              }
+            }
+            // If info === null the template has no applyFormat; best-effort — proceed.
+          }
+
+          // ----- 2. Resolve credentials -----
+          const holderPrivateKey = requireEnv(
+            HOLDER_PRIVATE_KEY,
+            "HOLDER_PRIVATE_KEY",
+            args.holderPrivateKey as string | undefined
+          );
+          const holderPublicKey =
+            pick(args.holderPublicKey as string | undefined, HOLDER_KEY) ??
+            (await signer.getPublicKey(holderPrivateKey));
+          const issuerPrivateKey = requireEnv(
+            ISSUER_PRIVATE_KEY,
+            "ISSUER_PRIVATE_KEY",
+            args.issuerPrivateKey as string | undefined
+          );
+
+          // Build the data array — single-template request. passDesignId optional.
+          const passDesignId = args.passDesignId as string | undefined;
+          const data: TemplateMetadataDto[] = [
+            {
+              templateId,
+              ...(passDesignId ? { passDesignId } : {}),
+              metadata,
+            },
+          ];
+
+          // ----- 3. Apply (holder) -----
+          const signPayload = stableStringify({ data });
+          const { signData: applySig } = await signer.sign(signPayload, holderPrivateKey);
+          const applyResp = await vcClient.applyVc({
+            data,
+            signData: applySig,
+            publicKey: holderPublicKey,
+          });
+
+          // ----- 4. Issue (issuer) -----
+          const issueResp = await vcClient.issueVc({
+            data,
+            holderDid,
+            issuerPrivateKey,
+            issuanceDate: args.issuanceDate as string | undefined,
+            expirationDate: args.expirationDate as string | undefined,
+            validFrom: args.validFrom as string | undefined,
+            validUntil: args.validUntil as string | undefined,
+            keyExpiry: args.keyExpiry as number | undefined,
+          });
+
+          // ----- 5. Download (holder) unless skipped -----
+          if (skipDownload) {
+            return toTextResult({
+              templateId,
+              templateName,
+              holderDid,
+              apply: applyResp,
+              vc: issueResp.vc,
+              vcPassBase64: issueResp.vcPassBase64,
+              downloadExpiryDate: issueResp.downloadExpiryDate,
+            });
+          }
+
+          // Sign the vcId from apply for the download proof-of-ownership.
+          const { signData: dlSig } = await signer.sign(applyResp.vcId, holderPrivateKey);
+          try {
+            const downloadResp = await vcClient.downloadVc({
+              vcId: applyResp.vcId,
+              signVcId: dlSig,
+            });
+            return toTextResult({
+              templateId,
+              templateName,
+              holderDid,
+              apply: applyResp,
+              vc: downloadResp.vc,
+              vcPassBase64: downloadResp.vcPassBase64,
+              downloadExpiryDate: downloadResp.downloadExpiryDate,
+            });
+          } catch (downloadErr) {
+            // Download failed — surface the VC returned by issue with a warning
+            // so the caller still gets a usable credential.
+            const msg = downloadErr instanceof Error ? downloadErr.message : String(downloadErr);
+            return toTextResult({
+              templateId,
+              templateName,
+              holderDid,
+              apply: applyResp,
+              vc: issueResp.vc,
+              vcPassBase64: issueResp.vcPassBase64,
+              downloadExpiryDate: issueResp.downloadExpiryDate,
+              warning: `Download step failed; returning VC from the issue step instead. Download error: ${msg}`,
+            });
+          }
         }
 
         case "zetrix_vc_apply": {
