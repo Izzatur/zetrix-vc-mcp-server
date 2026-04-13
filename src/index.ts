@@ -730,7 +730,13 @@ const tools: Tool[] = [
         },
         revealAttribute: {
           type: "array",
-          description: "Attribute names to selectively disclose (BBS+).",
+          description:
+            "Attribute paths to selectively disclose. Each entry is a **dotted path** into " +
+            "`credentialSubject` — e.g. `id`, `mykad.name`, `mykad.icNo`. The path format " +
+            "mirrors the VC's own structure (`credentialSubject.<camelCaseTemplateName>.<field>`). " +
+            "Pass `[]` to reveal everything (no selective disclosure), or list only the paths " +
+            "you want to disclose. The template's `applyFormat[].key` values plus the " +
+            "camelCased template name give you the paths: e.g. MyKAD template + `icNo` field → `mykad.icNo`.",
           items: { type: "string" },
         },
         rangeProof: {
@@ -1479,22 +1485,19 @@ function registerHandlers(server: Server) {
           const vc = args.vc as VerifiableCredential | undefined;
           if (!vc) throw new Error("`vc` is required.");
 
-          // Resolve the encoded pubkey from arg → HOLDER_KEY (only if encoded)
-          // → derive from HOLDER_PRIVATE_KEY. Address-form HOLDER_KEY is skipped.
-          let ed25519PubKey: string | undefined =
-            asEncodedEd25519PubKey(args.ed25519PubKey as string | undefined) ??
-            asEncodedEd25519PubKey(HOLDER_KEY);
-          const envPriv = pick(HOLDER_PRIVATE_KEY);
-          if (!ed25519PubKey && envPriv) {
-            ed25519PubKey = await signer.getPublicKey(envPriv);
-          }
-
+          // Only forward ed25519PubKey / bbsPublicKey when the caller explicitly
+          // supplies them. Auto-deriving them from holder keys caused the
+          // server to mis-verify the VC's Ed25519Signature2020 proof (the
+          // supplied pubkey was compared against the VC's issuer key instead
+          // of the VC's subject key). The Postman reference example sends
+          // only `vc` + `revealAttribute`, so we match that unless the caller
+          // opts in.
           const resp = await vcClient.createVp({
             vc,
             revealAttribute: args.revealAttribute as string[] | undefined,
             rangeProof: args.rangeProof as RangeProofDto | undefined,
-            bbsPublicKey: args.bbsPublicKey as string | undefined,
-            ed25519PubKey,
+            bbsPublicKey: asEncodedEd25519PubKey(args.bbsPublicKey as string | undefined),
+            ed25519PubKey: asEncodedEd25519PubKey(args.ed25519PubKey as string | undefined),
           });
           return toTextResult(resp);
         }
@@ -1522,7 +1525,13 @@ function registerHandlers(server: Server) {
               "HOLDER_PRIVATE_KEY",
               args.holderPrivateKey as string | undefined
             );
-            const sig = await signer.sign(blob, holderPrivateKey);
+            // vp/create returns `blob` as a hex-encoded payload (the
+            // canonicalized VP bytes). Detect hex-form and sign raw bytes;
+            // otherwise fall back to UTF-8 signing for older responses.
+            const looksHex = /^[0-9a-fA-F]+$/.test(blob) && blob.length % 2 === 0;
+            const sig = looksHex
+              ? await signer.signHex(blob, holderPrivateKey)
+              : await signer.sign(blob, holderPrivateKey);
             signData = sig.signData;
             if (!ed25519PubKey) ed25519PubKey = sig.publicKey;
           } else if (!ed25519PubKey) {
@@ -1553,23 +1562,30 @@ function registerHandlers(server: Server) {
             "HOLDER_PRIVATE_KEY",
             args.holderPrivateKey as string | undefined
           );
+          // For vp_submit we still need the holder's encoded pubkey (the server
+          // uses it to verify the holder's signature on the VP blob). But we
+          // DON'T send it on vp/create — see the zetrix_vp_create handler
+          // comment above.
           const ed25519PubKey = await resolveEncodedPublicKey(
             args.ed25519PubKey as string | undefined,
             HOLDER_KEY,
             holderPrivateKey
           );
 
-          // 1. Create the VP blob
+          // 1. Create the VP blob (do NOT send ed25519PubKey here)
           const created = await vcClient.createVp({
             vc,
             revealAttribute: args.revealAttribute as string[] | undefined,
             rangeProof: args.rangeProof as RangeProofDto | undefined,
-            bbsPublicKey: args.bbsPublicKey as string | undefined,
-            ed25519PubKey,
+            bbsPublicKey: asEncodedEd25519PubKey(args.bbsPublicKey as string | undefined),
           });
 
-          // 2. Sign the blob with the holder's private key
-          const { signData } = await signer.sign(created.blob, holderPrivateKey);
+          // 2. Sign the blob with the holder's private key. vp/create returns
+          // the blob as hex-encoded bytes, so hex-decode before signing.
+          const looksHex = /^[0-9a-fA-F]+$/.test(created.blob) && created.blob.length % 2 === 0;
+          const { signData } = looksHex
+            ? await signer.signHex(created.blob, holderPrivateKey)
+            : await signer.sign(created.blob, holderPrivateKey);
 
           // 3. Submit the signed blob
           const vp = await vcClient.submitVp({
@@ -1606,7 +1622,10 @@ function registerHandlers(server: Server) {
             ed25519PubKey: args.ed25519PubKey as string | undefined,
             bbsPublicKey: args.bbsPublicKey as string | undefined,
           });
-          return toTextResult(resp);
+          // Server returns `verified`; surface as both `verified` and
+          // `isVerified` so consumers expecting either field work.
+          const verified = resp.verified ?? resp.isVerified;
+          return toTextResult({ ...resp, verified, isVerified: verified });
         }
 
         // --------- Revocation Flow 3 ---------

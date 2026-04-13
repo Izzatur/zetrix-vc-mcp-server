@@ -26,10 +26,14 @@ The holder account was freshly generated via
 |---|---|
 | **Tools covered** | 17 / 17 (**100%**) |
 | **Test cases**    | 31 |
-| **Passed** (latest run) | **25** |
-| **Failed**        | 6 (all external — E1, E3) |
-| **Code bugs found by this suite** | 0 |
-| **Flows implemented** | Flow 1 direct ✓ · Flow 1 multi-step ✓ · Flow 2 VP ✓ · **Flow 3 Revocation ✓ (new)** |
+| **Passed** (latest run) | **30** 🎉 |
+| **Failed**        | 1 (only TC20 — Cloudflare IP block from test sandbox) |
+| **Code bugs surfaced by live testing** | 2 (now fixed — see B7/B8 below) |
+| **Flows implemented** | Flow 1 direct ✓ · Flow 1 multi-step ✓ · Flow 2 VP (all 5 steps) ✓ · Flow 3 Revocation ✓ |
+
+**E3 was never an issuer-side issue** — it was a client-side bug in our
+`vp/create` call. Fixed in commit below. The MCP server now completes
+every Postman-documented flow end-to-end on live UAT.
 
 All failures trace back to four external / environmental issues (E1–E4):
 
@@ -58,11 +62,11 @@ None of these are defects in the MCP server. See per-TC root cause below.
 | 6 | `zetrix_vc_apply` | 1 | 1/1 | TC12 |
 | 7 | `zetrix_vc_issue` | 1 | 1/1 | TC13 — full W3C VC with BBS+ + Ed25519 proofs |
 | 8 | `zetrix_vc_download` | 1 | ⚠️ 0/1 by-design | TC14 — *negative* case proving the apply → issue → download ordering. Positive path tested via TC11. |
-| 9 | `zetrix_vp_create` | 1 | 0/1 | TC15 — E3 |
-| 10 | `zetrix_vp_submit` | 1 | 0/1 | TC16 — cascade from E3 |
-| 11 | `zetrix_vp_present` | 1 | 0/1 | TC17 — cascade from E3 |
-| 12 | `zetrix_vp_cache` | 1 | 0/1 | TC19 — cascade from E3 |
-| 13 | `zetrix_vp_verify` | 1 | 0/1 | TC18 — cascade from E3 |
+| 9 | `zetrix_vp_create` | 1 | **1/1** | TC15 — live VP blob created, revealing id + mykad.name |
+| 10 | `zetrix_vp_submit` | 1 | **1/1** | TC16 — holder signs hex-decoded blob, server accepts |
+| 11 | `zetrix_vp_present` | 1 | **1/1** | TC17 — combo create+sign+submit+cache, uuid returned |
+| 12 | `zetrix_vp_cache` | 1 | **1/1** | TC19 — standalone cache, uuid returned |
+| 13 | `zetrix_vp_verify` | 1 | **1/1** | TC18 — server returns `isVerified: true`, vcDetail populated |
 | 14 | `zetrix_vc_revoke_create_blob` | — | — | Exercised via TC27 combo |
 | 15 | `zetrix_vc_revoke_submit` | — | — | Exercised via TC27 combo |
 | 16 | `zetrix_vc_revoke` (combo) | 1 | **1/1** | TC27 — live on-chain revocation with txHash |
@@ -493,22 +497,20 @@ runs them in the correct order automatically.
 - Never call `zetrix_vc_download` directly on a fresh `apply` `vcId`
   — the issue step must happen first.
 
-### E3 — VP create fails with "Failed to verify VC Ed25519Signature2020"
-**Affects:** TC15–19 (VP create, submit, present, cache, verify).
-**Cause:** BaaS-side — the `vp/create` endpoint fetches the issuer's
-DID document to verify the VC's Ed25519Signature2020 proof. The proof's
-`verificationMethod` references `did:zid:<issuer>#controllerKey`, and
-that key isn't resolvable (missing from the DID document).
-**Mitigation:** ensure the issuer's DID document has the
-`#controllerKey` verification method registered with the public key
-used to sign issued VCs. This is a one-time issuer setup.
-**Ruled out as causes (verified 2026-04-13):**
-- ACL permission caching — after ACL was added, error message changed
-  from "ACL permission invalid" to the current Ed25519 verification
-  error. ACL itself is no longer blocking.
-- Missing `validUntil` — issuing a VC with `validFrom` + `validUntil`
-  set produces a VC that still fails VP-create with the same error, so
-  the absence of these fields isn't the cause.
+### ~~E3 — VP create fails with "Failed to verify VC Ed25519Signature2020"~~ ✅ RESOLVED (client-side bug, not issuer-side)
+**Root cause (identified 2026-04-13):** my client was sending
+`ed25519PubKey` on the `vp/create` request body (auto-derived from the
+HOLDER key). The server used that supplied pubkey to verify the VC's
+`Ed25519Signature2020` proof — but that proof was signed by the *issuer*,
+not the holder, so the key didn't match and verification failed.
+The Postman reference example sends only `{ vc, revealAttribute }`.
+**Fix:** in `zetrix_vp_create`, stop auto-deriving `ed25519PubKey`.
+Only forward it when the caller explicitly provides an encoded
+(`b001…`) pubkey. See commit `Fix vp/create body: don't auto-send
+ed25519PubKey`.
+**Secondary fix:** `vp_submit` was signing the blob as UTF-8 bytes,
+but `vp/create` returns the blob as hex-encoded bytes. Switched to
+`signer.signHex()` when the blob matches hex-char format.
 
 ### E4 — Date-field format inconsistency (minor, documentation issue)
 **Affects:** `zetrix_vc_issue` and `zetrix_vc_request_credential` when
@@ -549,6 +551,9 @@ Bugs fixed during development & live testing (see `git log`):
 | B4 | `2784303` | axios pinned to `1.15.0` + npm `overrides` to block compromised `1.14.1` / `0.30.4`. |
 | B5 | `f58753f` | 8 bugs from systematic review: `pick()` trims, explicit args always override env, validate `ZETRIX_VC_NETWORK` at startup, `safeDerive` split try/catch per path, detect address-form `HOLDER_KEY`/`ISSUER_KEY`, cleaner Cloudflare error messages, more. |
 | B6 | `a49f81b` | Tool descriptions now specify `yyyy-MM-dd` format (was: ISO-8601), reflecting actual BaaS behavior. |
+| B7 | (this commit) | `vp/create` body was auto-including `ed25519PubKey`, which the server used to mis-verify the VC's issuer Ed25519 signature. Per Postman reference, `vp/create` accepts only `{ vc, revealAttribute }`. Fixed to only forward `ed25519PubKey`/`bbsPublicKey` when the caller explicitly supplies them. |
+| B8 | (this commit) | `vp_submit` was signing the `blob` as UTF-8 bytes, but `vp/create` returns the blob as hex-encoded bytes. Added auto-detect that routes to `signer.signHex()` for hex blobs. Same class of bug as the revocation flow. |
+| B9 | (this commit) | `VerifyVpRespDto.isVerified` → `verified`. The server returns `verified` (API reference misdocumented as `isVerified`). Handler now surfaces both field names for backward compat. |
 
 ---
 

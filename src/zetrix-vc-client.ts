@@ -166,9 +166,13 @@ export interface VcDetail {
 }
 
 export interface VerifyVpRespDto {
-  isVerified: boolean;
+  /** Actual field returned by the server (VC_VP_API_REFERENCE.md
+   *  incorrectly documents this as `isVerified`). */
+  verified?: boolean;
+  /** Back-compat alias — populated from `verified` when present. */
+  isVerified?: boolean;
   errMsg?: string | null;
-  vcDetail?: VcDetail[];
+  vcDetail?: VcDetail[] | null;
 }
 
 // ----- Full Flow 1 (apply → create → bbs-sign → submit → download) -----
