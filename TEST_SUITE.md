@@ -266,39 +266,76 @@ Matches external issue E2.
 
 ---
 
-### TC15 — `zetrix_vp_create` ❌ (E3)
+### TC15 — `zetrix_vp_create` ✅
 
-**Input:** `{ vc: <VC from TC11>, revealAttribute: ["name"] }`
+**Input:**
+```json
+{ "vc": "<VC from TC11>", "revealAttribute": ["id", "mykad.name"] }
+```
 
-**Observed:** `HTTP 400: Failed to verify VC Ed25519Signature2020 with issuer publicKey`
+**Result:** ✅ PASS. Server returns `{ blobId, blob }`, e.g.
+`blobId: "095760043E926FFE5564697C79B3EBF4"`. The `blob` is a
+hex-encoded canonicalized VP payload the holder must sign.
 
-**Root cause:** issuer DID document doesn't have `#controllerKey`
-registered. See E3 below. Server-side fix required.
-
----
-
-### TC16 — `zetrix_vp_submit` ❌ (cascade from TC15)
-
-Skipped because TC15 produced no blob. Code path verified by TC11's
-internal `vp_present → submit` call which uses identical signer logic.
-
----
-
-### TC17 — `zetrix_vp_present` ❌ (cascade from E3)
-
-Internally calls `vp/create`, same error.
-
----
-
-### TC18 — `zetrix_vp_verify` ❌ (cascade)
-
-Skipped — no VP to verify.
+**Important request-body rules** (surfaced by live testing):
+- Send **only** `vc` and `revealAttribute`. Do NOT send `ed25519PubKey`
+  or `bbsPublicKey` unless the caller explicitly provides them. The
+  server uses any supplied `ed25519PubKey` to verify the VC's own
+  Ed25519Signature2020 proof — which was signed by the *issuer*, not
+  the holder — so auto-including the holder pubkey makes the server
+  mis-verify and return `Failed to verify VC Ed25519Signature2020 with
+  issuer publicKey`. See bug B7.
+- `revealAttribute` uses **dotted paths** into `credentialSubject`, not
+  raw template keys. For MyKAD: `id`, `mykad.name`, `mykad.icNo`,
+  `mykad.expiry`. Pass `[]` for no selective disclosure.
 
 ---
 
-### TC19 — `zetrix_vp_cache` ❌ (cascade)
+### TC16 — `zetrix_vp_submit` ✅
 
-Skipped — no VP to cache.
+**Input:** `{ blobId, blob }` from TC15; holder key resolved from env.
+
+**Result:** ✅ PASS. Server returns a `VerifiablePresentation` with
+`type: ["VerifiablePresentation"]` and a holder `Ed25519Signature2020`
+proof.
+
+**Important:** the `blob` returned by `vp/create` is **hex-encoded**,
+not plain text. The tool auto-detects hex format and signs the decoded
+bytes via `signer.signHex()`. Signing the blob as UTF-8 produces wrong
+bytes and the server responds `Failed to verify VP
+Ed25519Signature2020 with holder publicKey`. See bug B8.
+
+---
+
+### TC17 — `zetrix_vp_present` (combo + cache) ✅
+
+**Input:** `{ vc, revealAttribute: ["id", "mykad.name"], cache: true }`
+
+**Result:** ✅ PASS. Runs create → sign → submit → cache in strict
+order; returns `{ blobId, vp, cache: { uuid } }`. Live example:
+`cache.uuid: "v2-5d947619-334c-4e90-a481-46f09b39bea7"`.
+
+---
+
+### TC18 — `zetrix_vp_verify` ✅
+
+**Input:** `{ vp: <VP from TC17> }`
+
+**Result:** ✅ PASS. Server response normalised to
+`{ verified: true, isVerified: true, vcDetail: [...] }`.
+The server actually returns `verified`; the handler surfaces both names
+for backward-compat with clients expecting the documented
+`isVerified`. See bug B9.
+
+---
+
+### TC19 — `zetrix_vp_cache` ✅
+
+**Input:** `{ vp: <signed VP> }`
+
+**Result:** ✅ PASS. Server returns `{ uuid: "v2-…" }` — a
+short-lived share token the holder can pass to a verifier, which they
+then redeem via the `GET /v1/vp/verify?id=<uuid>` back-compat route.
 
 ---
 
