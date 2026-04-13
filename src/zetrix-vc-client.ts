@@ -12,9 +12,9 @@
  *   POST /cred/v1/vp/cache       — Holder caches a signed VP, receives share uuid
  *   POST /cred/v1/vp/verify      — Verifier validates a VP
  *
- * Note: VC_VP_API_REFERENCE.md documents the local service paths as
- * `/v1/vc/*` and `/v1/vp/*`; the public gateway exposes them under
- * `/cred/v1/*`. Customers always use the `/cred/v1/*` form.
+ * Note: the local myeg-ms-credential service paths are `/v1/vc/*` and
+ * `/v1/vp/*`; the public gateway exposes them under `/cred/v1/*`.
+ * Customers always use the `/cred/v1/*` form.
  *
  * Authentication:
  *   - AWS API Gateway key — sent as `x-api-key`
@@ -50,7 +50,7 @@ export interface ResponseWrapper<T> {
   httpStatus?: string;
 }
 
-// ----- Request / Response DTOs (mirroring VC_VP_API_REFERENCE.md) -----
+// ----- Request / Response DTOs (mirroring the BaaS API contract) -----
 
 export interface TemplateMetadataDto {
   templateId: string;
@@ -166,8 +166,8 @@ export interface VcDetail {
 }
 
 export interface VerifyVpRespDto {
-  /** Actual field returned by the server (VC_VP_API_REFERENCE.md
-   *  incorrectly documents this as `isVerified`). */
+  /** Actual field returned by the server (some docs call it `isVerified`
+   *  but the wire format is `verified`). */
   verified?: boolean;
   /** Back-compat alias — populated from `verified` when present. */
   isVerified?: boolean;

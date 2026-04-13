@@ -11,7 +11,7 @@ Wraps the `myeg-ms-credential` service routed through the Zetrix BaaS gateway:
 | UAT     | `https://api-sandbox.zetrix.com` |
 | Prod    | `https://api.zetrix.com`         |
 
-See [`VC_VP_API_REFERENCE.md`](VC_VP_API_REFERENCE.md) for the full API contract.
+Full API contract and endpoint reference is documented in the Zetrix BaaS internal docs.
 
 ## Supported Flows
 

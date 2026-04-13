@@ -7,8 +7,8 @@
  *  - sign arbitrary payloads the BaaS API expects signatures for
  *    (e.g. ApplyVC request body hash, DownloadVC `vcId`, VP blob)
  *
- * The BaaS contract (see VC_VP_API_REFERENCE.md) expects hex-encoded signatures
- * over UTF-8 bytes of the canonicalised payload.
+ * The BaaS contract expects hex-encoded signatures over UTF-8 bytes of the
+ * canonicalised payload.
  */
 
 export interface Ed25519Signature {
