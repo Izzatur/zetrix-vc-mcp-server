@@ -342,6 +342,17 @@ function findMissingRequiredAttributes(
   });
 }
 
+/**
+ * Return today + 1 year as a `yyyy-MM-dd` string — used as the default
+ * `validUntil` when the caller doesn't supply one. The BaaS expects
+ * date-only format, not ISO-8601 with time.
+ */
+function defaultValidUntil(): string {
+  const d = new Date();
+  d.setUTCFullYear(d.getUTCFullYear() + 1);
+  return d.toISOString().slice(0, 10);
+}
+
 function toTextResult(payload: unknown) {
   return {
     content: [
@@ -499,7 +510,7 @@ const tools: Tool[] = [
         issuanceDate: { type: "string", description: "Optional issuance date (`yyyy-MM-dd`). Note: the BaaS preserves only validFrom/validUntil on issued VCs." },
         expirationDate: { type: "string", description: "Optional expiration date (`yyyy-MM-dd`). See issuanceDate note." },
         validFrom: { type: "string", description: "Optional validity start (`yyyy-MM-dd`)." },
-        validUntil: { type: "string", description: "Optional validity end (`yyyy-MM-dd`)." },
+        validUntil: { type: "string", description: "Validity end (`yyyy-MM-dd`). Defaults to one year from today when the user doesn't specify — only pass this if the user explicitly states a different expiry." },
         keyExpiry: { type: "number", description: "Optional key expiry override (default 0)." },
         skipTemplateValidation: {
           type: "boolean",
@@ -633,7 +644,7 @@ const tools: Tool[] = [
           description: "Optional expiration date (`yyyy-MM-dd`). See issuanceDate note.",
         },
         validFrom: { type: "string", description: "Optional validity start (`yyyy-MM-dd`)." },
-        validUntil: { type: "string", description: "Optional validity end (`yyyy-MM-dd`)." },
+        validUntil: { type: "string", description: "Validity end (`yyyy-MM-dd`). Defaults to one year from today when the user doesn't specify — only pass this if the user explicitly states a different expiry." },
         keyExpiry: { type: "number", description: "Optional key expiry override (default 0)." },
         issuerPrivateKey: {
           type: "string",
@@ -1331,6 +1342,10 @@ function registerHandlers(server: Server) {
           });
 
           // ----- 4. Issue (issuer) -----
+          // Default validUntil to +1 year when the caller doesn't supply one
+          // — VCs without a validity end aren't useful in practice, and the
+          // BaaS accepts yyyy-MM-dd format.
+          const resolvedValidUntil = pick(args.validUntil as string | undefined) ?? defaultValidUntil();
           const issueResp = await vcClient.issueVc({
             data,
             holderDid,
@@ -1338,7 +1353,7 @@ function registerHandlers(server: Server) {
             issuanceDate: args.issuanceDate as string | undefined,
             expirationDate: args.expirationDate as string | undefined,
             validFrom: args.validFrom as string | undefined,
-            validUntil: args.validUntil as string | undefined,
+            validUntil: resolvedValidUntil,
             keyExpiry: args.keyExpiry as number | undefined,
           });
 
@@ -1503,6 +1518,8 @@ function registerHandlers(server: Server) {
             "ISSUER_PRIVATE_KEY",
             args.issuerPrivateKey as string | undefined
           );
+          // Default validUntil to +1 year when not supplied by the caller.
+          const resolvedValidUntil = pick(args.validUntil as string | undefined) ?? defaultValidUntil();
           const resp = await vcClient.issueVc({
             holderDid,
             data,
@@ -1510,7 +1527,7 @@ function registerHandlers(server: Server) {
             issuanceDate: args.issuanceDate as string | undefined,
             expirationDate: args.expirationDate as string | undefined,
             validFrom: args.validFrom as string | undefined,
-            validUntil: args.validUntil as string | undefined,
+            validUntil: resolvedValidUntil,
             keyExpiry: args.keyExpiry as number | undefined,
           });
           return toTextResult(resp);
