@@ -247,17 +247,36 @@ export class ZetrixVcClient {
   }
 
   private unwrap<T>(path: string, status: number, data: unknown): T {
-    // BaaS responses are ResponseWrapper<T>. If `success === false`, surface
-    // the error messages; otherwise return `.object`.
-    if (data && typeof data === "object" && "success" in (data as Record<string, unknown>)) {
-      const w = data as ResponseWrapper<T>;
+    // BaaS responses come in a ResponseWrapper shape but the exact fields
+    // present vary:
+    //   - Error responses:    { messages: [...], httpStatus, success?: false }
+    //   - Success responses:  { object: { ... } }   ← no `success` field
+    // So we don't rely on `success` — we unwrap whenever `object` is present
+    // on a 2xx response, and treat `messages` as an error otherwise.
+    if (data && typeof data === "object") {
+      const w = data as ResponseWrapper<T> & Record<string, unknown>;
+
       if (w.success === false) {
-        const msg = formatMessages(w.messages);
         throw new Error(
-          `Zetrix BaaS ${path} failed (HTTP ${status}, httpStatus=${w.httpStatus ?? "?"}): ${msg}`
+          `Zetrix BaaS ${path} failed (HTTP ${status}, httpStatus=${w.httpStatus ?? "?"}): ${formatMessages(w.messages)}`
         );
       }
-      return w.object as T;
+
+      // Error response without explicit success flag — detect by messages.
+      if (
+        (status < 200 || status >= 300) &&
+        Array.isArray(w.messages) &&
+        w.messages.length > 0
+      ) {
+        throw new Error(
+          `Zetrix BaaS ${path} failed (HTTP ${status}): ${formatMessages(w.messages)}`
+        );
+      }
+
+      // Success: unwrap `object` when present.
+      if ("object" in w) {
+        return w.object as T;
+      }
     }
 
     // Not wrapped — if HTTP is OK, return raw body; otherwise raise.

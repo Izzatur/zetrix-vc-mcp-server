@@ -26,7 +26,6 @@ import {
 } from "./zetrix-vc-client.js";
 import {
   ZetrixVcSigner,
-  stableStringify,
   deriveDidFromEncodedPublicKey,
 } from "./zetrix-vc-signer.js";
 import {
@@ -233,20 +232,40 @@ async function generateDid(params: {
  * when the caller didn't supply one. If no default is set and an item is
  * missing `templateId`, throw.
  */
+/**
+ * Reshape each `TemplateMetadataDto` into the exact field order Jackson uses
+ * server-side (templateId → passDesignId → metadata → tds), with null/empty
+ * optional fields omitted. The apply/issue signature is verified against
+ * Jackson's re-serialization of `data`, so our outgoing JSON must match that
+ * order exactly — alphabetical or insertion-from-spread orderings produce
+ * different bytes and the signature then fails (error 650530).
+ *
+ * Also applies DEFAULT_TEMPLATE_ID as a fallback when an item has no
+ * explicit templateId.
+ */
 function applyDefaultTemplateId(data: TemplateMetadataDto[]): TemplateMetadataDto[] {
   const fallback = pick(DEFAULT_TEMPLATE_ID);
   return data.map((item, idx) => {
     const itemTemplateId = pick(
       typeof item?.templateId === "string" ? item.templateId : undefined
     );
-    if (itemTemplateId) return { ...item, templateId: itemTemplateId };
-    if (!fallback) {
+    const resolvedTemplateId = itemTemplateId ?? fallback;
+    if (!resolvedTemplateId) {
       throw new Error(
         `data[${idx}].templateId is missing and DEFAULT_TEMPLATE_ID is not set. ` +
           `Either include a templateId per item or configure DEFAULT_TEMPLATE_ID in the environment.`
       );
     }
-    return { ...item, templateId: fallback };
+    // Build each item in Jackson field-declaration order: templateId →
+    // passDesignId → metadata → tds (omit unset optional fields). This exact
+    // byte order must match what the server signs against, otherwise the
+    // signature fails verification (error 650530).
+    const out: Record<string, unknown> = {};
+    out.templateId = resolvedTemplateId;
+    if (pick(item.passDesignId)) out.passDesignId = item.passDesignId;
+    out.metadata = item.metadata;
+    if (pick(item.tds)) out.tds = item.tds;
+    return out as unknown as TemplateMetadataDto;
   });
 }
 
@@ -1106,7 +1125,11 @@ function registerHandlers(server: Server) {
           ];
 
           // ----- 3. Apply (holder) -----
-          const signPayload = stableStringify({ data });
+          // Server verifies the signature against the exact JSON bytes of
+          // the `data` array as sent on the wire (Jackson insertion order).
+          // Matching JSON.stringify(data) reproduces those bytes, so axios
+          // and the signer agree on the pre-image.
+          const signPayload = JSON.stringify(data);
           const { signData: applySig } = await signer.sign(signPayload, holderPrivateKey);
           const applyResp = await vcClient.applyVc({
             data,
@@ -1192,8 +1215,9 @@ function registerHandlers(server: Server) {
             holderPrivateKey
           );
 
-          // Sign the canonicalised `data` payload; server re-canonicalises to verify.
-          const signPayload = stableStringify({ data });
+          // Server verifies against the exact JSON bytes of the `data` array
+          // as sent on the wire — see `zetrix_vc_request_credential` for details.
+          const signPayload = JSON.stringify(data);
           const { signData } = await signer.sign(signPayload, holderPrivateKey);
 
           const resp = await vcClient.applyVc({
