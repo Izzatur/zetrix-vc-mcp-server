@@ -98,6 +98,28 @@ The **preferred** entrypoint is `zetrix_vc_request_credential` — it orchestrat
 | UAT (sandbox) | `https://api-sandbox.zetrix.com` | `https://test-node.zetrix.com` | `https://zid-resolver-sandbox.zetrix.com` |
 | Prod | `https://api.zetrix.com` | `https://node.zetrix.com` | `https://zid-resolver.zetrix.com` |
 
+## Official Addresses & Template IDs
+
+Use these when filling in `TDS_CONTRACT_ADDRESS`, `RCL_CONTRACT_ADDRESS`, and `DEFAULT_TEMPLATE_ID` environment variables.
+
+### Contract addresses
+
+| Contract | UAT | Prod |
+|---|---|---|
+| **TDS** (Template Data Store) | `ZTX3JszqPgRUx743SAp7q7zURfjvkWuH2FMEz` | `ZTX3GqJM1U6ifMPonwD4fGvrgoTKJua7b2cKX` |
+| **RCL** (Revocation Contract List) | `ZTX3Mmovq155gzrD6Medi6bC5pGKAi5Y3QMwx` | `ZTX3H5w3CR3Eih5Uucoj4taL9kenmf83imYAk` |
+
+### Official templates
+
+| Template | UAT (`DEFAULT_TEMPLATE_ID`) | Prod (`DEFAULT_TEMPLATE_ID`) |
+|---|---|---|
+| **MyKAD** | `did:zid:f1d675934d353394fa90d6132a3f8393b670a326632d936d1174df7307fadba4` | `did:zid:2139cb5dc5c2080ff4f85a85f6ae49322d109992a921d5f8d50e1af5eadf01d5` |
+| **Email** | `did:zid:9833ccc5238cfe4c61ccad652487c8b05f8c6f20e60073efe051fbbd1ea395aa` | `did:zid:9d0b9a925c66dab30a682446ea0bc75245e93eec6c0bb3a425b50795ebbb1a2e` |
+| **Driving License** | `did:zid:313dc2cf2a9950a688f6b759dfbbbc8cd69e1fb6db1d15d877970119748c0a7c` | `did:zid:89b37ba3ab25c02d96f3acfd948c68aa7b86c5c313b421522db06b86fc831d6e` |
+| **Passport** | `did:zid:4820fdbc080dda72335a436bba02252d341302382a58d7bb2ae8fe845579993e` | `did:zid:24cbe3286714b8dde39cdd04094f6b2c8d2c1803882d5762d06eb883971385f1` |
+
+Use `zetrix_vc_get_template_detail` at runtime to inspect a template's required claim fields.
+
 ## Configuration
 
 ### Environment Variables
