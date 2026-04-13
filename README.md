@@ -39,6 +39,14 @@ Plus:
   tool returns an error listing the missing keys (with their human-readable
   names) so the agent can ask the user for them and retry. Use this when the
   user says "issue me a VC" / "give me a credential".
+- `zetrix_vc_generate_did` — generate a Zetrix DID (`did:zid:<rawPubKey>`)
+  from a private key, encoded public key, or raw public key. Useful for
+  discovering "what is my DID" without any network call.
+- `zetrix_vc_resolve_did` — resolve a DID to its **DID document** via the
+  Zetrix ZID resolver (`GET /1.0/identifiers/<did>`). Surfaces the
+  `didDocument` (verification methods, service endpoints, permissions) plus
+  resolution metadata. Defaults to the holder's generated DID when called with
+  no arguments.
 
 ## Install & Build
 
@@ -139,15 +147,17 @@ auth. The keys in env are used for *outbound* BaaS calls only.
 | `ZETRIX_VC_PORT`        | no       | Port for HTTP transport (default `3000`).                                    |
 | `AWS_GATEWAY_API_KEY`   | yes\*    | Sent as `x-api-key`.                                                         |
 | `BAAS_API_KEY`          | yes\*    | Sent as `Authorization: Bearer <key>`.                                       |
-| `ISSUER_KEY`            | no       | Issuer public key (informational / diagnostics only).                        |
+| `ISSUER_KEY`            | no       | Issuer public key. If omitted, derived from `ISSUER_PRIVATE_KEY`.            |
 | `ISSUER_PRIVATE_KEY`    | †        | Required for `zetrix_vc_issue` (unless passed per-call).                     |
+| `ISSUER_DID`            | no       | Issuer DID. If omitted, generated as `did:zid:<rawPubKey>` from `ISSUER_KEY` or `ISSUER_PRIVATE_KEY`. |
 | `HOLDER_KEY`            | no       | Holder public key. If omitted, derived from `HOLDER_PRIVATE_KEY`.            |
 | `HOLDER_PRIVATE_KEY`    | †        | Required for apply / download / VP flows (unless passed per-call).           |
-| `HOLDER_DID`            | †        | Holder DID/ZID (e.g. `did:zid:ztx…`). Used by `zetrix_vc_issue` and `zetrix_vc_request_credential` (unless passed per-call). |
+| `HOLDER_DID`            | no       | Holder DID. If omitted, generated as `did:zid:<rawPubKey>` from `HOLDER_KEY` or `HOLDER_PRIVATE_KEY`. |
 | `DEFAULT_TEMPLATE_ID`   | no       | Fallback `templateId` used by `zetrix_vc_apply` / `zetrix_vc_issue` when a caller omits it on a `data[]` item. |
 | `TDS_CONTRACT_ADDRESS`  | no       | Template Data Store contract address. Used by `zetrix_vc_get_template_detail`. |
 | `RCL_CONTRACT_ADDRESS`  | no       | Revocation Contract List address (reserved for revocation lookups).          |
 | `ZETRIX_NODE_BASE_URL`  | no       | Override for the node RPC. Defaults by network: uat → `https://test-node.zetrix.com`, prod → `https://node.zetrix.com`. |
+| `ZETRIX_ZID_RESOLVER_URL` | no     | Override for the ZID DID resolver. Defaults by network: uat → `https://zid-resolver-sandbox.zetrix.com`, prod → `https://zid-resolver.zetrix.com`. |
 
 \* Required whenever the Zetrix BaaS gateway enforces the keys.
 † Private keys may alternatively be passed as tool arguments to avoid storing
@@ -265,7 +275,8 @@ explicit arg.
 |------------------------|----------------------------------------------------|
 | `HOLDER_PRIVATE_KEY`   | `holderPrivateKey` (apply / download / vp_* / request_credential) |
 | `HOLDER_KEY`           | `holderPublicKey` (apply / request_credential), `ed25519PubKey` (vp_*) |
-| `HOLDER_DID`           | `holderDid` (issue / request_credential)          |
+| `HOLDER_DID`           | `holderDid` (issue / request_credential) — else generated from keys |
+| `ISSUER_DID`           | (diagnostic) — generated from keys when not set   |
 | `ISSUER_PRIVATE_KEY`   | `issuerPrivateKey` (issue / download with `isIssuer:true` / request_credential) |
 | `TDS_CONTRACT_ADDRESS` | `tdsContractAddress` (get_template_detail)        |
 | `DEFAULT_TEMPLATE_ID`  | `templateId` on each `data[]` item, or top-level on get_template_detail |
@@ -283,6 +294,43 @@ sign canonicalised payloads:
 
 If you'd rather sign externally and submit the signature, every tool accepts
 pre-computed signature fields (`signData` / `ed25519SignData` / `signVcId`).
+
+## DID generation and resolution
+
+Zetrix DIDs have the form `did:zid:<rawPubKey>` where `<rawPubKey>` is the raw
+32-byte Ed25519 public key as hex. The server distinguishes two operations:
+
+- **Generate** (`zetrix_vc_generate_did`) — build the DID string locally from
+  your key material. No network call. Falls back through:
+  `privateKey` / `publicKey` / `rawPublicKey` args →
+  `HOLDER_*` or `ISSUER_*` env vars.
+- **Resolve** (`zetrix_vc_resolve_did`) — fetch the on-chain **DID document**
+  from the ZID resolver. The DID document lists the verification methods,
+  service endpoints, and permissions associated with the DID.
+
+```
+UAT:  https://zid-resolver-sandbox.zetrix.com/1.0/identifiers/<did>
+Prod: https://zid-resolver.zetrix.com/1.0/identifiers/<did>
+```
+
+If holder/issuer DIDs are not explicitly set via `HOLDER_DID` / `ISSUER_DID`,
+they are generated automatically from the corresponding key env vars, so you
+only need to provide the private key in most setups.
+
+Example — discover your own DID:
+
+```json
+{ "name": "zetrix_vc_generate_did", "arguments": { "role": "holder" } }
+// -> { "did": "did:zid:4e5fe94…", "source": "HOLDER_PRIVATE_KEY env" }
+```
+
+Example — inspect the DID document (permissions / services):
+
+```json
+{ "name": "zetrix_vc_resolve_did", "arguments": {} }  // defaults to holder DID
+// or explicit
+{ "name": "zetrix_vc_resolve_did", "arguments": { "did": "did:zid:acfdbaa6…" } }
+```
 
 ## One-shot issuance — `zetrix_vc_request_credential`
 

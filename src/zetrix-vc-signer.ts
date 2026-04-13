@@ -3,6 +3,7 @@
  *
  * Wraps `zetrix-encryption-nodejs` so we can:
  *  - derive a public key from a private key
+ *  - derive the holder DID (`did:zid:<raw pubkey>`) from a private/public key
  *  - sign arbitrary payloads the BaaS API expects signatures for
  *    (e.g. ApplyVC request body hash, DownloadVC `vcId`, VP blob)
  *
@@ -35,6 +36,20 @@ export class ZetrixVcSigner {
   }
 
   /**
+   * Derive the holder's DID from a private key.
+   *
+   *   DID = "did:zid:" + <raw 32-byte Ed25519 public key, hex>
+   *
+   * The library returns the encoded public key as
+   *   b001 <raw-hex:64> <checksum:8>  (76 hex chars total)
+   * so we strip the 2-byte prefix and the 4-byte trailing checksum.
+   */
+  async getDid(privateKey: string): Promise<string> {
+    const encoded = await this.getPublicKey(privateKey);
+    return deriveDidFromEncodedPublicKey(encoded);
+  }
+
+  /**
    * Sign the UTF-8 bytes of `payload` with the given Ed25519 private key.
    * Returns hex-encoded `signData` and the derived `publicKey`.
    */
@@ -61,6 +76,37 @@ export class ZetrixVcSigner {
     const bytes = new Uint8Array(Buffer.from(payload, "utf8"));
     return this.signature.verify(bytes, signData, publicKey);
   }
+}
+
+/**
+ * Convert a Zetrix-encoded Ed25519 public key (76-hex-char `b001…` form) to a
+ * holder DID string.
+ *
+ *   did:zid:<raw pub-key hex, 32 bytes = 64 hex chars>
+ *
+ * Throws if the input doesn't look like a Zetrix Ed25519 encoded pubkey.
+ */
+export function deriveDidFromEncodedPublicKey(encodedPublicKey: string): string {
+  return `did:zid:${encodedPublicKeyToRaw(encodedPublicKey)}`;
+}
+
+/**
+ * Strip the Zetrix encoding (2-byte `b001` prefix + 4-byte checksum) from an
+ * Ed25519 public key and return the raw 32-byte key as a hex string.
+ */
+export function encodedPublicKeyToRaw(encodedPublicKey: string): string {
+  const enc = encodedPublicKey.trim().toLowerCase();
+  if (enc.length !== 76) {
+    throw new Error(
+      `Cannot derive DID: expected a 76-char Zetrix Ed25519 encoded public key, got length ${enc.length}.`
+    );
+  }
+  if (!enc.startsWith("b001")) {
+    throw new Error(
+      `Cannot derive DID: expected the Zetrix Ed25519 encoded public key to start with 'b001', got '${enc.slice(0, 4)}'.`
+    );
+  }
+  return enc.slice(4, 4 + 64);
 }
 
 /** Deterministic JSON stringify — keys sorted, no insignificant whitespace. */

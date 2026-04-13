@@ -24,11 +24,19 @@ import {
   VerifiableCredential,
   VerifiablePresentation,
 } from "./zetrix-vc-client.js";
-import { ZetrixVcSigner, stableStringify } from "./zetrix-vc-signer.js";
+import {
+  ZetrixVcSigner,
+  stableStringify,
+  deriveDidFromEncodedPublicKey,
+} from "./zetrix-vc-signer.js";
 import {
   ZetrixNodeClient,
   ZETRIX_NODE_BASE_URLS,
 } from "./zetrix-node-client.js";
+import {
+  ZetrixZidResolver,
+  ZETRIX_ZID_RESOLVER_BASE_URLS,
+} from "./zetrix-zid-resolver.js";
 
 // -------------------------------------------------------------------------
 // Configuration
@@ -46,6 +54,7 @@ const BAAS_API_KEY = process.env.BAAS_API_KEY;
 
 const ISSUER_KEY = process.env.ISSUER_KEY;
 const ISSUER_PRIVATE_KEY = process.env.ISSUER_PRIVATE_KEY;
+const ISSUER_DID = process.env.ISSUER_DID;
 const HOLDER_KEY = process.env.HOLDER_KEY;
 const HOLDER_PRIVATE_KEY = process.env.HOLDER_PRIVATE_KEY;
 const HOLDER_DID = process.env.HOLDER_DID;
@@ -59,6 +68,9 @@ const RCL_CONTRACT_ADDRESS = process.env.RCL_CONTRACT_ADDRESS;
 // Zetrix public node RPC — used to resolve template / RCL metadata on-chain.
 const ZETRIX_NODE_BASE_URL = process.env.ZETRIX_NODE_BASE_URL;
 
+// Zetrix ZID (DID) resolver — resolves did:zid:... to its DID document.
+const ZETRIX_ZID_RESOLVER_URL = process.env.ZETRIX_ZID_RESOLVER_URL;
+
 const vcClient = new ZetrixVcClient({
   network: ZETRIX_VC_NETWORK,
   baseUrl: ZETRIX_VC_BASE_URL,
@@ -69,6 +81,13 @@ const vcClient = new ZetrixVcClient({
 const nodeClient = new ZetrixNodeClient({
   network: ZETRIX_VC_NETWORK,
   baseUrl: ZETRIX_NODE_BASE_URL,
+});
+
+const zidResolver = new ZetrixZidResolver({
+  network: ZETRIX_VC_NETWORK,
+  baseUrl: ZETRIX_ZID_RESOLVER_URL,
+  awsApiKey: AWS_GATEWAY_API_KEY,
+  baasApiKey: BAAS_API_KEY,
 });
 
 const signer = new ZetrixVcSigner();
@@ -105,6 +124,51 @@ function requireEnv(value: string | undefined, name: string, arg?: string): stri
     );
   }
   return resolved;
+}
+
+/**
+ * Generate (i.e. derive locally) a Zetrix DID for the holder or issuer role
+ * from the strongest available source:
+ *   1. explicit `didArg` argument                     (tool arg override)
+ *   2. explicit `didEnv` environment value            (HOLDER_DID / ISSUER_DID)
+ *   3. derive from an explicit public-key arg         (holderPublicKey / …)
+ *   4. derive from the corresponding public-key env   (HOLDER_KEY / ISSUER_KEY)
+ *   5. derive from an explicit private-key arg        (holderPrivateKey / …)
+ *   6. derive from the corresponding private-key env  (HOLDER_PRIVATE_KEY / ISSUER_PRIVATE_KEY)
+ *
+ * "Generate" rather than "resolve" — in DID terminology, resolving a DID means
+ * fetching its DID document from a DID resolver service (see the
+ * zetrix_vc_resolve_did tool for that). This function just constructs the DID
+ * string from local key material.
+ *
+ * Throws a descriptive error when none of the above yields a value.
+ */
+async function generateDid(params: {
+  role: "holder" | "issuer";
+  didArg?: string;
+  didEnv?: string;
+  publicKeyArg?: string;
+  publicKeyEnv?: string;
+  privateKeyArg?: string;
+  privateKeyEnv?: string;
+}): Promise<string> {
+  const explicit = pick(params.didArg, params.didEnv);
+  if (explicit) return explicit;
+
+  const pub = pick(params.publicKeyArg, params.publicKeyEnv);
+  if (pub) return deriveDidFromEncodedPublicKey(pub);
+
+  const priv = pick(params.privateKeyArg, params.privateKeyEnv);
+  if (priv) {
+    const encoded = await signer.getPublicKey(priv);
+    return deriveDidFromEncodedPublicKey(encoded);
+  }
+
+  const ROLE = params.role === "holder" ? "HOLDER" : "ISSUER";
+  throw new Error(
+    `Missing ${params.role}Did. Provide ${params.role}Did (or ${ROLE}_DID env), ` +
+      `or supply ${params.role}PublicKey/${params.role}PrivateKey (or ${ROLE}_KEY/${ROLE}_PRIVATE_KEY env) so the DID can be derived as did:zid:<rawPubKey>.`
+  );
 }
 
 /**
@@ -217,6 +281,65 @@ const tools: Tool[] = [
     description:
       "Get the current version, network (uat/prod) and effective base URL of the Zetrix VC MCP server.",
     inputSchema: { type: "object", properties: {}, required: [] },
+  },
+
+  // --------------------- Utility: Derive DID ---------------------
+  {
+    name: "zetrix_vc_generate_did",
+    description:
+      "Derive the Zetrix DID (`did:zid:<rawPubKey>`) from an Ed25519 private key, Zetrix-encoded public key, or already-known raw public key. " +
+      "Handy for discovering 'what is my DID' without hitting the BaaS. Resolution order for the input: " +
+      "explicit `privateKey` → explicit `publicKey` → explicit `rawPublicKey` → HOLDER_PRIVATE_KEY env → HOLDER_KEY env → ISSUER_PRIVATE_KEY env → ISSUER_KEY env.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        privateKey: {
+          type: "string",
+          description: "Zetrix Ed25519 private key (56-char `priv…` form).",
+        },
+        publicKey: {
+          type: "string",
+          description: "Zetrix-encoded Ed25519 public key (76-char `b001…` form).",
+        },
+        rawPublicKey: {
+          type: "string",
+          description: "Already-raw Ed25519 public key hex (64 chars).",
+        },
+        role: {
+          type: "string",
+          enum: ["holder", "issuer"],
+          description:
+            "When no key args are provided, which env role to fall back to: 'holder' (HOLDER_*) or 'issuer' (ISSUER_*). Default 'holder'.",
+        },
+      },
+      required: [],
+    },
+  },
+
+  // --------------------- DID: Resolve ---------------------
+  {
+    name: "zetrix_vc_resolve_did",
+    description:
+      "Resolve a Zetrix DID (did:zid:...) to its DID document using the Zetrix ZID resolver. " +
+      "Calls GET <resolver>/1.0/identifiers/<did>. The response follows the W3C DID Resolution spec " +
+      "— it contains `didDocument` (with verificationMethod, service endpoints, and permissions) " +
+      "plus `didResolutionMetadata` / `didDocumentMetadata`. " +
+      "Use this to inspect what a DID is authorised to do — e.g. which verification methods it has " +
+      "registered and which services / permissions it exposes on-chain. " +
+      "Resolver URL is selected from ZETRIX_VC_NETWORK (uat → zid-resolver-sandbox.zetrix.com, " +
+      "prod → zid-resolver.zetrix.com) or the ZETRIX_ZID_RESOLVER_URL override. " +
+      "When `did` is omitted the holder's DID (derived from holder keys / HOLDER_DID) is used.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        did: {
+          type: "string",
+          description:
+            "The DID to resolve (e.g. did:zid:acfdbaa6…). If omitted, the holder's DID is generated from local keys (HOLDER_DID / HOLDER_KEY / HOLDER_PRIVATE_KEY).",
+        },
+      },
+      required: [],
+    },
   },
 
   // --------------------- VC: Template lookup ---------------------
@@ -381,13 +504,26 @@ const tools: Tool[] = [
     description:
       "Issuer issues a Verifiable Credential directly to a holder DID in a single call (create + sign + submit). " +
       "Explicit `issuerPrivateKey` arg overrides ISSUER_PRIVATE_KEY from the environment. " +
+      "`holderDid` resolution order: explicit arg → HOLDER_DID env → derived from holderPublicKey/HOLDER_KEY → derived from holderPrivateKey/HOLDER_PRIVATE_KEY (did:zid:<rawPubKey>). " +
       "Maps to POST /v1/vc/issue.",
     inputSchema: {
       type: "object",
       properties: {
         holderDid: {
           type: "string",
-          description: "Holder DID / ZID that will receive the VC (e.g. did:zid:ztx...).",
+          description:
+            "Holder DID / ZID that will receive the VC (e.g. did:zid:ztx...). " +
+            "If omitted, falls back to HOLDER_DID env var or is derived as did:zid:<rawPubKey> from the holder's public or private key.",
+        },
+        holderPublicKey: {
+          type: "string",
+          description:
+            "Holder Ed25519 public key used to derive holderDid when neither `holderDid` nor HOLDER_DID is set. Overrides HOLDER_KEY env var.",
+        },
+        holderPrivateKey: {
+          type: "string",
+          description:
+            "Holder Ed25519 private key used to derive holderDid when no DID or public key is available. Overrides HOLDER_PRIVATE_KEY env var.",
         },
         data: {
           type: "array",
@@ -435,7 +571,7 @@ const tools: Tool[] = [
             "Issuer Ed25519 private key (56 chars). Overrides ISSUER_PRIVATE_KEY env var when provided.",
         },
       },
-      required: ["holderDid", "data"],
+      required: ["data"],
     },
   },
 
@@ -675,6 +811,19 @@ function registerHandlers(server: Server) {
     try {
       switch (name) {
         case "zetrix_vc_version": {
+          // Derive DIDs for diagnostics when possible (non-fatal if keys missing).
+          const safeDerive = async (priv?: string, pub?: string) => {
+            try {
+              if (pick(pub)) return deriveDidFromEncodedPublicKey(pub!);
+              if (pick(priv)) return await signer.getDid(priv!);
+            } catch {
+              /* ignore — diagnostics shouldn't fail */
+            }
+            return null;
+          };
+          const derivedHolderDid = HOLDER_DID ?? (await safeDerive(HOLDER_PRIVATE_KEY, HOLDER_KEY));
+          const derivedIssuerDid = ISSUER_DID ?? (await safeDerive(ISSUER_PRIVATE_KEY, ISSUER_KEY));
+
           return toTextResult({
             name: "zetrix-vc-mcp-server",
             version: MCP_VERSION,
@@ -688,9 +837,10 @@ function registerHandlers(server: Server) {
             identities: {
               issuerKey: ISSUER_KEY ? "set" : "missing",
               issuerPrivateKey: ISSUER_PRIVATE_KEY ? "set" : "missing",
+              issuerDid: derivedIssuerDid,
               holderKey: HOLDER_KEY ? "set" : "missing",
               holderPrivateKey: HOLDER_PRIVATE_KEY ? "set" : "missing",
-              holderDid: HOLDER_DID ?? null,
+              holderDid: derivedHolderDid,
             },
             defaults: {
               templateId: DEFAULT_TEMPLATE_ID ?? null,
@@ -703,6 +853,71 @@ function registerHandlers(server: Server) {
               baseUrl: nodeClient.baseUrl,
               defaultBaseUrls: ZETRIX_NODE_BASE_URLS,
             },
+            zidResolver: {
+              baseUrl: zidResolver.baseUrl,
+              defaultBaseUrls: ZETRIX_ZID_RESOLVER_BASE_URLS,
+            },
+          });
+        }
+
+        case "zetrix_vc_generate_did": {
+          const role = (args.role as "holder" | "issuer" | undefined) ?? "holder";
+          const rawArg = pick(args.rawPublicKey as string | undefined);
+          if (rawArg) {
+            if (!/^[0-9a-fA-F]{64}$/.test(rawArg)) {
+              throw new Error(
+                `rawPublicKey must be 64 hex chars (32 bytes), got "${rawArg}".`
+              );
+            }
+            return toTextResult({ did: `did:zid:${rawArg.toLowerCase()}`, source: "rawPublicKey" });
+          }
+
+          const pubArg = pick(
+            args.publicKey as string | undefined,
+            role === "holder" ? HOLDER_KEY : ISSUER_KEY
+          );
+          if (pubArg) {
+            return toTextResult({
+              did: deriveDidFromEncodedPublicKey(pubArg),
+              source: args.publicKey ? "publicKey" : `${role === "holder" ? "HOLDER_KEY" : "ISSUER_KEY"} env`,
+            });
+          }
+
+          const privArg = pick(
+            args.privateKey as string | undefined,
+            role === "holder" ? HOLDER_PRIVATE_KEY : ISSUER_PRIVATE_KEY
+          );
+          if (privArg) {
+            const did = await signer.getDid(privArg);
+            return toTextResult({
+              did,
+              source: args.privateKey
+                ? "privateKey"
+                : `${role === "holder" ? "HOLDER_PRIVATE_KEY" : "ISSUER_PRIVATE_KEY"} env`,
+            });
+          }
+
+          throw new Error(
+            "No key provided. Pass `privateKey`, `publicKey`, or `rawPublicKey`, or set one of the " +
+              `${role === "holder" ? "HOLDER_" : "ISSUER_"}KEY / ${role === "holder" ? "HOLDER_" : "ISSUER_"}PRIVATE_KEY env vars.`
+          );
+        }
+
+        case "zetrix_vc_resolve_did": {
+          // If the caller didn't pass a DID, generate it from the holder role
+          // (most common case when user asks "show me my DID document / permissions").
+          const did = pick(args.did as string | undefined) ??
+            (await generateDid({
+              role: "holder",
+              didEnv: HOLDER_DID,
+              publicKeyEnv: HOLDER_KEY,
+              privateKeyEnv: HOLDER_PRIVATE_KEY,
+            }));
+          const doc = await zidResolver.resolve(did);
+          return toTextResult({
+            did,
+            resolver: zidResolver.baseUrl,
+            resolution: doc,
           });
         }
 
@@ -732,11 +947,15 @@ function registerHandlers(server: Server) {
             "templateId (or DEFAULT_TEMPLATE_ID)",
             args.templateId as string | undefined
           );
-          const holderDid = requireEnv(
-            HOLDER_DID,
-            "holderDid (or HOLDER_DID)",
-            args.holderDid as string | undefined
-          );
+          const holderDid = await generateDid({
+            role: "holder",
+            didArg: args.holderDid as string | undefined,
+            didEnv: HOLDER_DID,
+            publicKeyArg: args.holderPublicKey as string | undefined,
+            publicKeyEnv: HOLDER_KEY,
+            privateKeyArg: args.holderPrivateKey as string | undefined,
+            privateKeyEnv: HOLDER_PRIVATE_KEY,
+          });
           const skipTemplateValidation = args.skipTemplateValidation === true;
           const skipDownload = args.skipDownload === true;
 
@@ -894,8 +1113,15 @@ function registerHandlers(server: Server) {
         }
 
         case "zetrix_vc_issue": {
-          const holderDid = args.holderDid as string | undefined;
-          if (!holderDid) throw new Error("`holderDid` is required.");
+          const holderDid = await generateDid({
+            role: "holder",
+            didArg: args.holderDid as string | undefined,
+            didEnv: HOLDER_DID,
+            publicKeyArg: args.holderPublicKey as string | undefined,
+            publicKeyEnv: HOLDER_KEY,
+            privateKeyArg: args.holderPrivateKey as string | undefined,
+            privateKeyEnv: HOLDER_PRIVATE_KEY,
+          });
           const rawData = args.data as TemplateMetadataDto[] | undefined;
           if (!rawData || !Array.isArray(rawData) || rawData.length === 0) {
             throw new Error("`data` must be a non-empty array of TemplateMetadataDto.");
