@@ -48,8 +48,11 @@
   "license": "MIT",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.23.0",
-    "axios": "^1.13.2",
+    "axios": "1.15.0",
     "zetrix-encryption-nodejs": "^1.0.1"
+  },
+  "overrides": {
+    "axios": "1.15.0"
   },
   "devDependencies": {
     "@types/node": "^24.10.1",
