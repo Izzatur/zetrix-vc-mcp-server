@@ -458,27 +458,24 @@ const tools: Tool[] = [
   {
     name: "zetrix_vc_request_credential",
     description:
-      "Issue a Verifiable Credential end-to-end in one call. Use this when the user says 'apply a VC', 'issue me a VC', 'give me a credential', or similar. " +
-      "The tool runs the full apply → issue → download sequence and returns the signed W3C JSON-LD VerifiableCredential. " +
-      "\n\n" +
-      "**How to gather inputs from the user:**\n" +
-      "• Holder and issuer identity, template id, and contract addresses are pre-configured — don't ask the user about these unless they're not configured (the tool will tell you if something's missing). Never mention environment variables, fallbacks, or the underlying configuration mechanism to the user.\n" +
-      "• The ONLY thing you typically need from the user is the claim values — but don't ask for them generically. If the user hasn't given you the claim values, call this tool immediately with `metadata: {}`. The tool will return an error listing exactly which fields the template requires (with human-readable labels like 'IC Number' or 'Full Name'). Use that list to ask the user for the specific values.\n" +
-      "• Once you have the values, call the tool again with `metadata: {...}` filled in.\n" +
+      "Issue a Verifiable Credential end-to-end (apply → issue → download). Use when the user says 'apply a VC', 'issue me a VC', 'give me a credential', or similar.\n" +
       "\n" +
-      "**What the tool does internally (informational only — don't expose to the user):**\n" +
-      "1. Fetches the template from the on-chain TDS contract.\n" +
-      "2. Validates every required attribute is present in `metadata`.\n" +
-      "3. Applies (holder), issues (issuer), downloads (holder) — in strict order.\n" +
-      "4. Returns the signed W3C VerifiableCredential.",
+      "**MANDATORY FIRST STEP:** call this tool immediately with no arguments (`{}`) — do NOT ask the user anything first. " +
+      "If required fields are missing, the tool returns an error listing exactly which fields the template requires, with human-readable labels (e.g. 'IC Number', 'Full Name'). " +
+      "Use that list to ask the user for the specific values, then call again with `metadata` populated.\n" +
+      "\n" +
+      "**Do not ask the user about:** templateId, holderDid, contract addresses, keys, or 'which fields you want' — these are all handled by the tool or pre-configured. Never mention environment configuration to the user.\n" +
+      "\n" +
+      "**What you may need to ask the user:** the claim values only (e.g. their name, IC number, expiry date) — and only AFTER calling the tool once to discover what those fields are.",
     inputSchema: {
       type: "object",
       properties: {
         metadata: {
           type: "object",
           description:
-            "Claim values for the VC, one entry per required template field (e.g. `{ name, icNo, expiry }`). " +
-            "If you don't know the required fields yet, pass `{}` and the tool will return the list.",
+            "Optional. Claim values for the VC (one entry per required template field). " +
+            "If you don't know the field names yet, omit this — the tool will call back with the list of required fields, their labels, and types. " +
+            "Never ask the user what fields to include; let this tool tell you.",
           additionalProperties: true,
         },
         templateId: {
@@ -523,7 +520,7 @@ const tools: Tool[] = [
           description: "Optional per-call issuer private key override. Usually omitted.",
         },
       },
-      required: ["metadata"],
+      required: [],
     },
   },
 
@@ -1197,10 +1194,14 @@ function registerHandlers(server: Server) {
         }
 
         case "zetrix_vc_request_credential": {
-          const metadata = args.metadata as Record<string, unknown> | undefined;
-          if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
-            throw new Error("`metadata` must be an object of claim key/values.");
-          }
+          // Treat missing/null metadata as an empty object so the template
+          // validation step runs and returns the helpful "required attributes"
+          // error listing which fields to ask the user for.
+          const rawMetadata = args.metadata;
+          const metadata: Record<string, unknown> =
+            rawMetadata && typeof rawMetadata === "object" && !Array.isArray(rawMetadata)
+              ? (rawMetadata as Record<string, unknown>)
+              : {};
 
           const templateId = requireEnv(
             DEFAULT_TEMPLATE_ID,
@@ -1240,12 +1241,13 @@ function registerHandlers(server: Server) {
               const missing = findMissingRequiredAttributes(metadata, info);
               if (missing.length > 0) {
                 const list = missing
-                  .map((m) => `  - ${m.key} (${m.attribute}, ${m.format})`)
+                  .map((m) => `  - ${m.key}  (label: "${m.attribute}", format: ${m.format})`)
                   .join("\n");
                 throw new Error(
-                  `Cannot issue VC — template "${templateName ?? templateId}" requires these attributes that are missing or empty in \`metadata\`:\n` +
+                  `NEXT_STEP_REQUIRED: the "${templateName ?? templateId}" template needs these fields before I can issue the VC — ask the user for each value, then retry this tool with \`metadata\` populated using the \`key\` names on the left:\n\n` +
                     `${list}\n\n` +
-                    `Ask the user for these values and retry with them included in \`metadata\` (use the \`key\` names shown above).`
+                    `Example retry:\n` +
+                    `  zetrix_vc_request_credential({ metadata: { ${missing.map((m) => `"${m.key}": "<value from user>"`).join(", ")} } })`
                 );
               }
             }
