@@ -14,6 +14,9 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import { createServer, IncomingMessage, ServerResponse } from "node:http";
 import { randomUUID } from "node:crypto";
+import { writeFile, mkdir } from "node:fs/promises";
+import { resolve as pathResolve, dirname as pathDirname, isAbsolute } from "node:path";
+import { homedir } from "node:os";
 
 import {
   ZetrixVcClient,
@@ -77,6 +80,11 @@ const ZETRIX_NODE_BASE_URL = process.env.ZETRIX_NODE_BASE_URL;
 
 // Zetrix ZID (DID) resolver — resolves did:zid:... to its DID document.
 const ZETRIX_ZID_RESOLVER_URL = process.env.ZETRIX_ZID_RESOLVER_URL;
+
+// Directory where downloaded VCs are written as .json files. When unset,
+// defaults to the current working directory the MCP server was launched from.
+// Accepts `~` as a shortcut for the user's home directory.
+const ZETRIX_VC_DOWNLOAD_DIR = process.env.ZETRIX_VC_DOWNLOAD_DIR;
 
 const vcClient = new ZetrixVcClient({
   network: ZETRIX_VC_NETWORK,
@@ -343,6 +351,61 @@ function findMissingRequiredAttributes(
 }
 
 /**
+ * Expand `~` and `~/...` paths using the current user's home dir.
+ */
+function expandPath(p: string): string {
+  if (p === "~") return homedir();
+  if (p.startsWith("~/")) return pathResolve(homedir(), p.slice(2));
+  return p;
+}
+
+/**
+ * Derive a default filename for a downloaded VC. Uses the template type
+ * (`MyKAD` → `mykad`) + a short vcId suffix so multiple downloads don't
+ * collide and the file is recognisable.
+ *
+ *   mykad-a14f9f3b2c.json
+ */
+function defaultVcFilename(vc: { id?: string; type?: string[] }): string {
+  const type = Array.isArray(vc.type) ? vc.type.find((t) => t !== "VerifiableCredential") : undefined;
+  const slug = (type ?? "vc").toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "") || "vc";
+  const id = typeof vc.id === "string" ? vc.id.replace(/^did:zid:/, "").slice(0, 12) : randomUUID().slice(0, 12);
+  return `${slug}-${id}.json`;
+}
+
+/**
+ * Write the downloaded VC to disk as pretty-printed JSON. Resolution order:
+ *   1. `outputPath` arg — explicit file path (absolute, or relative to CWD)
+ *   2. `outputDir` arg / ZETRIX_VC_DOWNLOAD_DIR env — directory; filename auto-derived
+ *   3. CWD + auto-derived filename
+ *
+ * Returns the absolute path of the written file.
+ */
+async function writeVcToFile(
+  vc: Record<string, unknown>,
+  opts: { outputPath?: string; outputDir?: string } = {}
+): Promise<string> {
+  const explicit = pick(opts.outputPath);
+  let target: string;
+  if (explicit) {
+    const expanded = expandPath(explicit);
+    target = isAbsolute(expanded) ? expanded : pathResolve(process.cwd(), expanded);
+  } else {
+    const dirArg = pick(opts.outputDir) ?? pick(ZETRIX_VC_DOWNLOAD_DIR) ?? process.cwd();
+    const expandedDir = expandPath(dirArg);
+    const resolvedDir = isAbsolute(expandedDir) ? expandedDir : pathResolve(process.cwd(), expandedDir);
+    target = pathResolve(
+      resolvedDir,
+      defaultVcFilename(vc as { id?: string; type?: string[] })
+    );
+  }
+
+  await mkdir(pathDirname(target), { recursive: true });
+  await writeFile(target, JSON.stringify(vc, null, 2) + "\n", "utf8");
+  return target;
+}
+
+/**
  * Return today + 1 year as a `yyyy-MM-dd` string — used as the default
  * `validUntil` when the caller doesn't supply one. The BaaS expects
  * date-only format, not ISO-8601 with time.
@@ -532,6 +595,22 @@ const tools: Tool[] = [
           type: "string",
           description: "Optional per-call issuer private key override. Usually omitted.",
         },
+        writeFile: {
+          type: "boolean",
+          description:
+            "Whether to save the downloaded VC as a `.json` file to disk. Default: true. " +
+            "Set to false if the caller doesn't want a local file (e.g. pure API clients).",
+        },
+        outputPath: {
+          type: "string",
+          description:
+            "Optional exact file path for the saved VC (e.g. `~/Desktop/mykad.json`). If omitted, a filename is auto-derived and placed in `outputDir` (or the server's CWD).",
+        },
+        outputDir: {
+          type: "string",
+          description:
+            "Optional directory to save the VC into (e.g. `~/Downloads`). If omitted, uses the configured default or the server's CWD. Ignored when `outputPath` is set.",
+        },
       },
       required: [],
     },
@@ -698,6 +777,20 @@ const tools: Tool[] = [
         isIssuer: {
           type: "boolean",
           description: "Set to true when the issuer is downloading (default false).",
+        },
+        writeFile: {
+          type: "boolean",
+          description: "Whether to save the downloaded VC as a `.json` file. Default: true.",
+        },
+        outputPath: {
+          type: "string",
+          description:
+            "Optional exact file path for the saved VC (e.g. `~/Desktop/mykad.json`). If omitted, a filename is auto-derived and placed in `outputDir` (or the server's CWD).",
+        },
+        outputDir: {
+          type: "string",
+          description:
+            "Optional directory to save the VC into (e.g. `~/Downloads`). If omitted, uses the configured default or the server's CWD. Ignored when `outputPath` is set.",
         },
       },
       required: ["vcId"],
@@ -1372,11 +1465,50 @@ function registerHandlers(server: Server) {
 
           // Sign the vcId from apply for the download proof-of-ownership.
           const { signData: dlSig } = await signer.sign(applyResp.vcId, holderPrivateKey);
+
+          // The BaaS has eventual consistency between issue and download —
+          // right after issue returns 200, the VC may not yet be visible to
+          // the download endpoint ("The VC application has not been issued
+          // yet"). Retry with backoff to absorb that race.
+          const downloadWithRetry = async () => {
+            const attempts = [0, 500, 1500, 3500, 7000]; // ms between attempts (total ~12.5s)
+            let lastErr: unknown = null;
+            for (let i = 0; i < attempts.length; i++) {
+              if (attempts[i] > 0) await new Promise((r) => setTimeout(r, attempts[i]));
+              try {
+                return await vcClient.downloadVc({ vcId: applyResp.vcId, signVcId: dlSig });
+              } catch (err) {
+                lastErr = err;
+                const msg = err instanceof Error ? err.message : String(err);
+                // Only retry on the specific eventual-consistency error.
+                if (!msg.includes("not been issued yet") && !msg.includes("VC_RECORD_NOT_EXIST")) {
+                  throw err;
+                }
+                // Otherwise, fall through and try again.
+              }
+            }
+            throw lastErr;
+          };
+
           try {
-            const downloadResp = await vcClient.downloadVc({
-              vcId: applyResp.vcId,
-              signVcId: dlSig,
-            });
+            const downloadResp = await downloadWithRetry();
+            // Write the VC to a local JSON file for the user to download /
+            // see in their filesystem.
+            let fileSaved: string | null = null;
+            let fileSaveError: string | null = null;
+            if (args.writeFile !== false) {
+              try {
+                fileSaved = await writeVcToFile(
+                  downloadResp.vc as unknown as Record<string, unknown>,
+                  {
+                    outputPath: args.outputPath as string | undefined,
+                    outputDir: args.outputDir as string | undefined,
+                  }
+                );
+              } catch (e) {
+                fileSaveError = e instanceof Error ? e.message : String(e);
+              }
+            }
             return toTextResult({
               templateId,
               templateName,
@@ -1385,11 +1517,25 @@ function registerHandlers(server: Server) {
               vc: downloadResp.vc,
               vcPassBase64: downloadResp.vcPassBase64,
               downloadExpiryDate: downloadResp.downloadExpiryDate,
+              fileSaved,
+              ...(fileSaveError ? { fileSaveError } : {}),
             });
           } catch (downloadErr) {
-            // Download failed — surface the VC returned by issue with a warning
-            // so the caller still gets a usable credential.
+            // Download still failed after all retries — surface the VC from
+            // the issue step so the caller has something usable.
             const msg = downloadErr instanceof Error ? downloadErr.message : String(downloadErr);
+            let fileSaved: string | null = null;
+            if (args.writeFile !== false) {
+              try {
+                fileSaved = await writeVcToFile(
+                  issueResp.vc as unknown as Record<string, unknown>,
+                  {
+                    outputPath: args.outputPath as string | undefined,
+                    outputDir: args.outputDir as string | undefined,
+                  }
+                );
+              } catch { /* ignore — non-fatal */ }
+            }
             return toTextResult({
               templateId,
               templateName,
@@ -1398,7 +1544,8 @@ function registerHandlers(server: Server) {
               vc: issueResp.vc,
               vcPassBase64: issueResp.vcPassBase64,
               downloadExpiryDate: issueResp.downloadExpiryDate,
-              warning: `Download step failed; returning VC from the issue step instead. Download error: ${msg}`,
+              fileSaved,
+              warning: `Download step failed even after retries; returning VC from the issue step instead. Download error: ${msg}`,
             });
           }
         }
@@ -1559,7 +1706,28 @@ function registerHandlers(server: Server) {
           }
 
           const resp = await vcClient.downloadVc({ vcId, signVcId, isIssuer });
-          return toTextResult(resp);
+
+          // Write the downloaded VC to disk unless explicitly disabled.
+          // UI clients (Claude Desktop etc.) can let the user click the path;
+          // CLI users just see the file in their cwd.
+          let savedPath: string | null = null;
+          if (args.writeFile !== false) {
+            try {
+              savedPath = await writeVcToFile(resp.vc as unknown as Record<string, unknown>, {
+                outputPath: args.outputPath as string | undefined,
+                outputDir: args.outputDir as string | undefined,
+              });
+            } catch (e) {
+              // File write failure is non-fatal — still return the VC in-band.
+              savedPath = null;
+              return toTextResult({
+                ...resp,
+                fileSaved: null,
+                fileSaveError: e instanceof Error ? e.message : String(e),
+              });
+            }
+          }
+          return toTextResult({ ...resp, fileSaved: savedPath });
         }
 
         case "zetrix_vp_create": {
