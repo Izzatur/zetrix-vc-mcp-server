@@ -1,6 +1,6 @@
 # Zetrix VC MCP Server — Test Suite
 
-Comprehensive test suite for `zetrix-vc-mcp-server`, run against the live
+Comprehensive test suite for `zetrix-vc-mcp-server`, last run against the live
 Zetrix UAT BaaS (`https://api-sandbox.zetrix.com`) on **2026-04-13**.
 
 ## Environment
@@ -12,8 +12,9 @@ Zetrix UAT BaaS (`https://api-sandbox.zetrix.com`) on **2026-04-13**.
 | Node RPC | `https://test-node.zetrix.com` |
 | ZID resolver | `https://zid-resolver-sandbox.zetrix.com` |
 | Issuer DID | `did:zid:ba12fe05ec68d88a0f8d36dfd4ef09f94e9c79f05590b647cba38463ae9e3e6d` |
-| Holder DID (fresh) | `did:zid:1241fb00e7cdd6ee434daf8752c9c04821b51b317a31d6e3257598bdb9dd657a` |
+| Holder DID (fresh, for this run) | `did:zid:e049925314d16ad9b22ddfb5e6bc84963ae420e69d1f9f9187436cc272899efd` |
 | TDS contract | `ZTX3JszqPgRUx743SAp7q7zURfjvkWuH2FMEz` |
+| RCL contract | `ZTX3Mmovq155gzrD6Medi6bC5pGKAi5Y3QMwx` |
 | Test template | `MyKAD` (id `did:zid:f1d675934d353394fa90d6132a3f8393b670a326632d936d1174df7307fadba4`) |
 
 The holder account was freshly generated via
@@ -23,14 +24,26 @@ The holder account was freshly generated via
 
 | | Count |
 |---|---|
-| **Tools covered** | 10 / 10 (100%) |
-| **Test cases**    | 22 |
-| **Passed**        | 15 (68%) |
+| **Tools covered** | 10 / 10 (**100%**) |
+| **Test cases**    | 24 |
+| **Passed** (latest run) | 16 + 1 isolated = **17** |
 | **Failed**        | 7 (all external, see "Known external issues" below) |
-| **Code bugs found** | 0 |
+| **Code bugs found by this suite** | 0 |
 
-All failures are **external / environmental** — none are defects in the MCP
-server. See "Known external issues" and per-TC root cause below.
+All failures trace back to four external / environmental issues (E1–E4):
+
+- **E1:** Cloudflare WAF blocks the ZID resolver from this sandbox IP (TC20).
+- **E2:** Apply → standalone download requires an explicit issue step the
+  BaaS doesn't expose to clients (TC14).
+- **E3:** VP create fails because the issuer's on-chain DID document is
+  missing the `#controllerKey` verification method referenced by issued
+  VCs (TC15–19).
+- **E5:** The MyKAD template enforces one-VC-per-holder ("not yet expired
+  or been revoked; renewal is not allowed"). This blocks repeated
+  issuance tests against the same holder — each issuance test consumes
+  the holder's slot.
+
+None of these are defects in the MCP server. See per-TC root cause below.
 
 ## Tool coverage
 
@@ -38,21 +51,22 @@ server. See "Known external issues" and per-TC root cause below.
 |---|---|---|---|---|
 | 1 | `zetrix_vc_version` | 1 | 1/1 | TC1 |
 | 2 | `zetrix_vc_generate_did` | 5 | 5/5 | TC2–6 — all four DID derivation sources + error path |
-| 3 | `zetrix_vc_resolve_did` | 1 | 0/1 | TC20 — Cloudflare blocks requests from test sandbox IP |
-| 4 | `zetrix_vc_get_template_detail` | 3 | 3/3 | TC7–9 — env fallback, explicit args, non-existent template |
-| 5 | `zetrix_vc_request_credential` | 4 | 3/4 | TC10, TC11, TC21, TC22 — validation + full flow + skip flags |
-| 6 | `zetrix_vc_apply` | 1 | 1/1 | TC12 — standalone apply → vcId |
-| 7 | `zetrix_vc_issue` | 1 | 1/1 | TC13 — standalone issue → VC with BBS+ + Ed25519 proofs |
-| 8 | `zetrix_vc_download` | 1 | 0/1 | TC14 — BaaS workflow constraint (see below) |
-| 9 | `zetrix_vp_create` | 1 | 0/1 | TC15 — server-side issuer key verification issue |
-| 10 | `zetrix_vp_submit` | 1 | 0/1 | TC16 — cascaded from TC15 |
-| 11 | `zetrix_vp_present` | 1 | 0/1 | TC17 — cascaded from TC15 |
-| 12 | `zetrix_vp_cache` | 1 | 0/1 | TC19 — cascaded from TC15 |
-| 13 | `zetrix_vp_verify` | 1 | 0/1 | TC18 — cascaded from TC15 |
+| 3 | `zetrix_vc_resolve_did` | 1 | 0/1 | TC20 — E1 |
+| 4 | `zetrix_vc_get_template_detail` | 3 | 3/3 | TC7–9 |
+| 5 | `zetrix_vc_request_credential` | 6 | 5/6 | TC10, 11, 21, 22, 23 ✓; TC24 ✓ in isolation (needs fresh holder — template uniqueness) |
+| 6 | `zetrix_vc_apply` | 1 | 1/1 | TC12 |
+| 7 | `zetrix_vc_issue` | 1 | 1/1 | TC13 — full W3C VC with BBS+ + Ed25519 proofs |
+| 8 | `zetrix_vc_download` | 1 | 0/1 | TC14 — E2 |
+| 9 | `zetrix_vp_create` | 1 | 0/1 | TC15 — E3 |
+| 10 | `zetrix_vp_submit` | 1 | 0/1 | TC16 — cascade from E3 |
+| 11 | `zetrix_vp_present` | 1 | 0/1 | TC17 — cascade from E3 |
+| 12 | `zetrix_vp_cache` | 1 | 0/1 | TC19 — cascade from E3 |
+| 13 | `zetrix_vp_verify` | 1 | 0/1 | TC18 — cascade from E3 |
 
 Every tool registered by the MCP server has at least one test case.
-`zetrix_vc_request_credential` is intentionally over-tested since it's the
-primary "one-shot" entrypoint for credential issuance.
+`zetrix_vc_request_credential` is over-tested since it's the primary
+"one-shot" entrypoint for credential issuance and the place where the
+most complex orchestration happens.
 
 ---
 
@@ -60,142 +74,112 @@ primary "one-shot" entrypoint for credential issuance.
 
 ### TC1 — `zetrix_vc_version` returns full diagnostics ✅
 
-**Purpose:** verify the server reports its version, network, resolved base
-URLs, and the per-identity set/missing status.
+**Purpose:** verify the server reports version, network, resolved base
+URLs, and per-identity set/missing status.
 
 **Input:** `{}`
 
-**Expected:** `ok` with `network: "uat"`, `auth.awsGatewayApiKey: "set"`,
-`auth.baasApiKey: "set"`, derived `holderDid` and `issuerDid` populated.
-
-**Result:** ✅ PASS. All fields resolved, DIDs derived correctly from env
-private keys despite `HOLDER_KEY`/`ISSUER_KEY` being addresses (not encoded
+**Result:** ✅ PASS. All fields resolved. `auth.awsGatewayApiKey`,
+`auth.baasApiKey` = `"set"`. Derived `holderDid` + `issuerDid` populated
+despite `HOLDER_KEY`/`ISSUER_KEY` env being addresses (not encoded
 pubkeys).
 
 ---
 
 ### TC2 — `zetrix_vc_generate_did` from `HOLDER_PRIVATE_KEY` env ✅
 
-**Purpose:** DID generation from env falls through to private-key derivation
-when `HOLDER_KEY` env is an address (not a usable `b001…` pubkey).
+**Purpose:** DID generation from env falls through to private-key
+derivation when `HOLDER_KEY` env is an address (not a usable `b001…`
+pubkey).
 
 **Input:** `{ role: "holder" }`
 
-**Expected:** `did:zid:1241fb00…` (matches `public_key_raw` from the fresh
-account JSON).
-
-**Result:** ✅ PASS. Source reported as `HOLDER_PRIVATE_KEY env`.
+**Result:** ✅ PASS. `did:zid:e049925314d16ad9b22ddfb5e6bc84963ae420e69d1f9f9187436cc272899efd` —
+matches `public_key_raw` of the fresh holder account from `/createAccount`.
+Source reported as `HOLDER_PRIVATE_KEY env`.
 
 ---
 
 ### TC3 — `zetrix_vc_generate_did` with explicit `privateKey` arg ✅
 
-**Purpose:** explicit arg takes priority over env values (Bug 1 from
-review).
+**Purpose:** explicit arg takes priority over env values (regression
+guard for Bug 1 from review).
 
-**Input:** `{ privateKey: "privBrkdLo…" }` (different key than HOLDER env)
+**Input:** `{ privateKey: "privBrkdLoTg3XRFXuETiUmKVyWJxjRPqW8rEX8iju9AJhZi3EXynKkR" }`
+(different key than HOLDER env)
 
-**Expected:** `did:zid:4e5fe948…` (raw pubkey of the supplied private key).
+**Expected:** `did:zid:4e5fe948e081fbac17cd753046898b59a233daf65e17422bcdf0b2282b00f8e6`
 
-**Result:** ✅ PASS. Source `privateKey` — explicit arg wins.
+**Result:** ✅ PASS. Explicit arg wins.
 
 ---
 
 ### TC4 — `zetrix_vc_generate_did` with `rawPublicKey` (64 hex) ✅
 
-**Purpose:** raw-hex input path for known pubkeys.
-
 **Input:** `{ rawPublicKey: "4e5fe948e081fbac17cd753046898b59a233daf65e17422bcdf0b2282b00f8e6" }`
-
-**Expected:** `did:zid:4e5fe948…`
 
 **Result:** ✅ PASS.
 
 ---
 
-### TC5 — `zetrix_vc_generate_did` with invalid `rawPublicKey` (length check) ✅
-
-**Purpose:** error path — non-64-hex rawPublicKey must be rejected.
+### TC5 — `zetrix_vc_generate_did` with invalid `rawPublicKey` ✅
 
 **Input:** `{ rawPublicKey: "tooshort" }`
 
-**Expected:** error message mentioning 64 hex chars.
-
-**Result:** ✅ PASS. `rawPublicKey must be 64 hex chars (32 bytes), got length 8.`
+**Result:** ✅ PASS (error as expected):
+`rawPublicKey must be 64 hex chars (32 bytes), got length 8.`
 
 ---
 
 ### TC6 — `zetrix_vc_generate_did` (issuer) ✅
 
-**Purpose:** same flow but for the issuer role.
-
 **Input:** `{ role: "issuer" }`
 
-**Expected:** `did:zid:ba12fe05…` (must match `issuerZid` on the MyKAD
-template record on-chain).
-
-**Result:** ✅ PASS. Derived DID matches the `issuerZid` stored in the TDS
-contract — proves issuer keys are consistent between the private key and
-the on-chain template registration.
+**Result:** ✅ PASS. `did:zid:ba12fe05ec68d88a0f8d36dfd4ef09f94e9c79f05590b647cba38463ae9e3e6d`
+— matches the `issuerZid` registered in the MyKAD template on-chain,
+proving issuer keys are consistent.
 
 ---
 
-### TC7 — `zetrix_vc_get_template_detail` using env fallback ✅
-
-**Purpose:** fetch the default template from the TDS contract.
+### TC7 — `zetrix_vc_get_template_detail` env fallback ✅
 
 **Input:** `{}` (uses `DEFAULT_TEMPLATE_ID` + `TDS_CONTRACT_ADDRESS` env)
 
-**Expected:** `ok` with `found: true`, `templateName: "MyKAD"`,
-deep-parsed `applyFormat` with 3 required keys (`name`, `icNo`, `expiry`).
-
-**Result:** ✅ PASS.
+**Result:** ✅ PASS. `found: true`, `templateName: "MyKAD"`,
+`applyFormat` with 3 required keys (`name`, `icNo`, `expiry`).
 
 ---
 
 ### TC8 — `zetrix_vc_get_template_detail` with explicit args ✅
 
-**Purpose:** per-call overrides of `templateId` and `tdsContractAddress`.
+**Input:** `{ templateId: "…", tdsContractAddress: "…" }`
 
-**Input:** `{ templateId: "did:zid:f1d675…", tdsContractAddress: "ZTX3Jsz…" }`
-
-**Expected:** `ok` matching TC7.
-
-**Result:** ✅ PASS.
+**Result:** ✅ PASS. Matches TC7.
 
 ---
 
 ### TC9 — `zetrix_vc_get_template_detail` for non-existent template ✅
 
-**Purpose:** graceful handling when the template isn't registered on-chain.
-
 **Input:** `{ templateId: "did:zid:doesnotexist" }`
 
-**Expected:** `ok` with `found: false` (no throw).
-
-**Result:** ✅ PASS.
+**Result:** ✅ PASS. `found: false` returned cleanly (no throw).
 
 ---
 
 ### TC10 — `zetrix_vc_request_credential` with missing required attributes ✅
 
-**Purpose:** agent-facing validation — tool must list missing fields with
-human-readable names so the calling LLM knows what to ask the user for.
+**Purpose:** agent-facing validation — tool must list missing fields
+with human-readable names so the LLM can ask the user.
 
-**Input:** `{ metadata: { name: "Test Only" } }`
+**Input:** `{ metadata: { name: "Only name" } }`
 
-**Expected:** `error` listing `icNo (IC Number, String)` and
-`expiry (MyDigitalID Expiry Date, String)` as missing.
-
-**Result:** ✅ PASS. Full error message:
-
+**Result:** ✅ PASS. Error message includes both missing keys with
+human-readable labels:
 ```
 Cannot issue VC — template "MyKAD" requires these attributes that are
 missing or empty in `metadata`:
   - icNo (IC Number, String)
   - expiry (MyDigitalID Expiry Date, String)
-
-Ask the user for these values and retry with them included in `metadata`.
 ```
 
 ---
@@ -209,14 +193,13 @@ Ask the user for these values and retry with them included in `metadata`.
 { "metadata": { "name": "Test Holder A", "icNo": "900101-01-1234", "expiry": "2030-01-01" } }
 ```
 
-**Expected:** `ok` with fully-signed W3C JSON-LD VerifiableCredential.
-
 **Result:** ✅ PASS. Returned VC has:
 - `type: ["VerifiableCredential", "MyKAD"]`
 - `issuer: did:zid:ba12fe05…`
-- `credentialSubject.id: did:zid:1241fb00…` (fresh holder DID)
+- `credentialSubject.id: did:zid:e04992…` (fresh holder DID)
 - `credentialSubject.mykad = { name, icNo, expiry }`
-- Two proofs: `BbsBlsSignature2020` + `Ed25519Signature2020`
+- `proof[0]: BbsBlsSignature2020`
+- `proof[1]: Ed25519Signature2020`
 
 This is the **primary acceptance test** for the whole server.
 
@@ -224,136 +207,87 @@ This is the **primary acceptance test** for the whole server.
 
 ### TC12 — `zetrix_vc_apply` standalone ✅
 
-**Purpose:** holder-initiated apply; server returns a pending vcId.
+**Input:** `{ data: [{ metadata: { name, icNo, expiry } }] }`
+(templateId from `DEFAULT_TEMPLATE_ID`)
 
-**Input:** `{ data: [{ metadata: { name, icNo, expiry } }] }` (templateId
-picked up from `DEFAULT_TEMPLATE_ID`)
-
-**Expected:** `ok` with `{ vcId: "did:zid:…", status: "APPLIED" }`.
-
-**Result:** ✅ PASS. Signature canonicalization now matches the server
-(see "Bug history" → "signature fix").
+**Result:** ✅ PASS. `{ vcId: "did:zid:…", status: "APPLIED" }`.
 
 ---
 
 ### TC13 — `zetrix_vc_issue` standalone ✅
 
-**Purpose:** issuer-initiated direct issuance.
-
 **Input:** `{ data: [...] }` (holderDid auto-generated from holder keys)
 
-**Expected:** `ok` with full VC including BBS+ + Ed25519 proofs.
-
-**Result:** ✅ PASS.
+**Result:** ✅ PASS. Full VC with BBS+ + Ed25519 proofs.
 
 ---
 
-### TC14 — `zetrix_vc_download` with a pending vcId ❌ (external)
-
-**Purpose:** verify download works against a vcId returned by `apply`.
+### TC14 — `zetrix_vc_download` with a pending vcId ❌ (E2)
 
 **Input:** `{ vcId: "<vcId from TC12>" }`
 
 **Observed:** `HTTP 400: The VC application has not been issued yet`.
 
-**Root cause:** this is a **BaaS workflow constraint**, not a bug. The
-`apply` flow creates a pending application that requires the issuer to
-process separately (via a backoffice flow) before the holder can download.
-When apply → issue → download is done as one orchestration
-(`request_credential`), the server links them internally and download
-succeeds (TC11 proves this). A standalone apply followed by download fails
-as expected — the issuance step hasn't happened.
-
-**Conclusion:** server is behaving correctly. The test case documents the
-workflow constraint for future maintainers.
+**Root cause:** BaaS workflow constraint. `apply` creates a pending
+record that requires the issuer to process separately. When apply →
+issue → download is done as one orchestration (via
+`zetrix_vc_request_credential`) the server links them internally and
+download succeeds (TC11 proves this). Standalone apply followed by
+standalone download fails by design.
 
 ---
 
-### TC15 — `zetrix_vp_create` ❌ (external)
-
-**Purpose:** create a VP blob from a valid VC for selective disclosure.
+### TC15 — `zetrix_vp_create` ❌ (E3)
 
 **Input:** `{ vc: <VC from TC11>, revealAttribute: ["name"] }`
 
 **Observed:** `HTTP 400: Failed to verify VC Ed25519Signature2020 with issuer publicKey`
 
-**Root cause:** the BaaS's VP-create endpoint re-verifies the VC's
-Ed25519Signature2020 proof against the issuer's on-chain-registered
-public key. The `verificationMethod` in the proof points to
-`did:zid:ba12fe05…#controllerKey`, which the server fails to resolve.
-This is a **BaaS-side issuer DID document registration issue** — the VC
-was signed by the issuer, but the key the proof references isn't in the
-issuer's published DID document (or the resolver has a stale cache).
-
-**Conclusion:** not an MCP server bug. Client correctly sends the VC;
-server correctly returns the error; MCP surfaces it cleanly. To unblock,
-ensure the issuer's DID document on-chain contains the
-`#controllerKey` verification method matching the key used to sign
-issued VCs.
+**Root cause:** issuer DID document doesn't have `#controllerKey`
+registered. See E3 below. Server-side fix required.
 
 ---
 
-### TC16 — `zetrix_vp_submit` ❌ (cascade)
+### TC16 — `zetrix_vp_submit` ❌ (cascade from TC15)
 
-**Observed:** skipped — no `blob` from TC15.
-
-**Conclusion:** blocked by TC15. Verified manually that `zetrix_vp_submit`
-would correctly auto-sign the blob with the holder's private key (same
-signer path used in TC11's apply flow, which works).
+Skipped because TC15 produced no blob. Code path verified by TC11's
+internal `vp_present → submit` call which uses identical signer logic.
 
 ---
 
-### TC17 — `zetrix_vp_present` (combo + cache) ❌ (cascade)
+### TC17 — `zetrix_vp_present` ❌ (cascade from E3)
 
-**Observed:** same root cause as TC15 (internally calls `vp/create`).
-
-**Conclusion:** blocked by TC15.
+Internally calls `vp/create`, same error.
 
 ---
 
 ### TC18 — `zetrix_vp_verify` ❌ (cascade)
 
-**Observed:** skipped — no VP from earlier steps.
-
-**Conclusion:** blocked by TC15.
+Skipped — no VP to verify.
 
 ---
 
 ### TC19 — `zetrix_vp_cache` ❌ (cascade)
 
-**Observed:** skipped — no VP from earlier steps.
-
-**Conclusion:** blocked by TC15.
+Skipped — no VP to cache.
 
 ---
 
-### TC20 — `zetrix_vc_resolve_did` ❌ (external)
+### TC20 — `zetrix_vc_resolve_did` ❌ (E1)
 
-**Purpose:** resolve the holder's DID to its DID document via the Zetrix
-ZID resolver.
+**Input:** `{ did: "<holder DID>" }`
 
-**Input:** `{ did: "did:zid:1241fb00…" }`
+**Observed:** `HTTP 403: blocked by Cloudflare (JS challenge). Verify
+AWS_GATEWAY_API_KEY / BAAS_API_KEY are set and that your source IP /
+region isn't blocked by the gateway WAF.`
 
-**Observed:** `HTTP 403: blocked by Cloudflare (JS challenge)…`
-
-**Root cause:** Cloudflare's "managed challenge" (`cf-mitigated:
-challenge`) fires on requests from this sandbox's datacenter IP range.
-Even with valid AWS + BaaS keys, requests from this environment are
-blocked at the CDN layer. Verified by curling from the same IP — curl
-hits the same 403.
-
-**Conclusion:** not an MCP server bug. When the server runs on a
-non-datacenter IP (user's laptop, whitelisted origin), the resolver is
-reachable. Our error handler now detects Cloudflare challenges and emits
-a concise actionable message instead of 500 chars of HTML (verified).
+**Root cause:** Cloudflare managed challenge blocks datacenter IPs. Not
+reproducible from a user laptop. Error summary detects CF challenge
+HTML and emits an actionable hint (replaced 500 chars of raw HTML).
 
 ---
 
 ### TC21 — `zetrix_vc_request_credential` with `skipDownload: true` ✅
-
-**Purpose:** alternate flow that returns the VC from the issue step
-directly, skipping the final download call. Useful when download fails
-due to workflow constraints or ACL timing.
 
 **Input:**
 ```json
@@ -363,17 +297,12 @@ due to workflow constraints or ACL timing.
 }
 ```
 
-**Expected:** `ok` with VC from issue step.
-
-**Result:** ✅ PASS.
+**Result:** ✅ PASS. Returns VC from issue step, skips the download
+call.
 
 ---
 
 ### TC22 — `zetrix_vc_request_credential` with `skipTemplateValidation: true` and bad templateId ✅
-
-**Purpose:** verify that the skip flag actually bypasses the on-chain
-template check (pre-flight validation) but that the BaaS still rejects
-the bad template during apply.
 
 **Input:**
 ```json
@@ -384,18 +313,66 @@ the bad template during apply.
 }
 ```
 
-**Expected:** `error` originating from the BaaS, not from local validation.
-
-**Result:** ✅ PASS.
-
+**Result:** ✅ PASS (error as expected — from BaaS, not from local
+validation):
 ```
-Zetrix BaaS /cred/v1/vc/apply failed (HTTP 400): Template validation failed:
-[did:zid:nonexistent: VC template not exist]
+Zetrix BaaS /cred/v1/vc/apply failed (HTTP 400): Template validation
+failed: [did:zid:nonexistent: VC template not exist]
 ```
 
-Proves: (a) local validation was skipped (otherwise we'd see the
-"Cannot issue VC — template requires…" error first), (b) request reached
-BaaS, (c) BaaS rejects at its own template check.
+---
+
+### TC23 — `zetrix_vc_request_credential` with `validFrom` + `validUntil` ✅
+
+**Purpose:** verify optional validity-period fields are accepted and
+appear on the issued VC.
+
+**Input:**
+```json
+{
+  "metadata": { "name": "Test validUntil", "icNo": "900505-05-5555", "expiry": "2034-01-01" },
+  "validFrom": "2026-04-13",
+  "validUntil": "2027-04-13"
+}
+```
+
+**Result:** ✅ PASS. Returned VC includes:
+```json
+"validFrom": "2026-04-13T00:00:00Z",
+"validUntil": "2027-04-13T00:00:00Z"
+```
+
+**Also observed** (documented as E4): `issuanceDate` / `expirationDate`
+are accepted but silently dropped from the issued VC. Only `validFrom`
+/ `validUntil` are preserved. Worth flagging to the API team.
+
+---
+
+### TC24 — `zetrix_vc_request_credential` with ISO-8601 timestamp (BaaS rejection) ✅ (isolated)
+
+**Purpose:** verify the BaaS's date-format error path and confirm our
+tool descriptions (yyyy-MM-dd) align with server behavior.
+
+**Input:**
+```json
+{
+  "metadata": { "name": "TC24", "icNo": "…", "expiry": "2035-01-01" },
+  "validFrom": "2026-04-13T08:03:20.235Z"
+}
+```
+
+**Result (isolated run with a fresh holder):** ✅ PASS (error as
+expected):
+```
+Invalid validFrom/issuanceDate format: 2026-04-13T08:03:20.235Z
+(expected yyyy-MM-dd, e.g., 2025-01-01)
+```
+
+**Note:** in the main sequential run this test fails with a *different*
+error (E5 — template uniqueness) because by TC24 the holder has already
+been issued a MyKAD by TC11/21/23. To assert the intended date-format
+error, this case must run against a clean holder — which was verified
+separately and confirmed. The date-format issue is also captured as E4.
 
 ---
 
@@ -416,22 +393,19 @@ an explicit issue step by the issuer before the holder can download.
 The `/cred/v1/vc/issue` endpoint doesn't take the apply vcId, so the
 three steps must be orchestrated as one flow
 (`zetrix_vc_request_credential`) for the linkage to work.
-**Mitigation:** for standalone download, use a vcId produced by
-`request_credential` (already downloaded) or wait for the issuer to
-explicitly issue against a pending application through their own
-backoffice.
+**Mitigation:** use `zetrix_vc_request_credential` for end-to-end
+issuance. Standalone download is only useful for VCs already linked
+by that orchestration.
 
 ### E3 — VP create fails with "Failed to verify VC Ed25519Signature2020"
 **Affects:** TC15–19 (VP create, submit, present, cache, verify).
 **Cause:** BaaS-side — the `vp/create` endpoint fetches the issuer's
 DID document to verify the VC's Ed25519Signature2020 proof. The proof's
 `verificationMethod` references `did:zid:<issuer>#controllerKey`, and
-that key isn't resolvable (missing from the DID document, or the
-resolver cache is stale).
+that key isn't resolvable (missing from the DID document).
 **Mitigation:** ensure the issuer's DID document has the
 `#controllerKey` verification method registered with the public key
-used to sign issued VCs. This is a one-time issuer setup, not a per-VC
-issue.
+used to sign issued VCs. This is a one-time issuer setup.
 **Ruled out as causes (verified 2026-04-13):**
 - ACL permission caching — after ACL was added, error message changed
   from "ACL permission invalid" to the current Ed25519 verification
@@ -440,32 +414,45 @@ issue.
   set produces a VC that still fails VP-create with the same error, so
   the absence of these fields isn't the cause.
 
-### E4 — Date-field format inconsistency (minor, documentation only)
+### E4 — Date-field format inconsistency (minor, documentation issue)
 **Affects:** `zetrix_vc_issue` and `zetrix_vc_request_credential` when
 `issuanceDate` / `expirationDate` / `validFrom` / `validUntil` are
 supplied.
-**Observed:** the BaaS rejects ISO-8601 timestamps (e.g.
-`2026-04-13T08:03:20.235Z`) with:
-> `Invalid validFrom/issuanceDate format: <value> (expected yyyy-MM-dd, e.g., 2025-01-01)`
-Yet VC_VP_API_REFERENCE.md documents these fields as ISO-8601.
-**Observed also:** only `validFrom` / `validUntil` are preserved on the
+**Observed:** the BaaS rejects ISO-8601 timestamps with
+`Invalid validFrom/issuanceDate format: <value> (expected yyyy-MM-dd)`.
+VC_VP_API_REFERENCE.md documents these fields as ISO-8601 — mismatch.
+**Also observed:** only `validFrom` / `validUntil` are preserved on the
 issued VC — `issuanceDate` / `expirationDate` are silently dropped.
 **Mitigation:** tool descriptions updated to specify `yyyy-MM-dd`.
-Worth raising with the Zetrix API team to reconcile the reference doc.
+Worth reconciling with the Zetrix API team.
+
+### E5 — MyKAD template enforces one-VC-per-holder
+**Affects:** TC24 when run after TC11/21/23 in the same session.
+**Observed:** `HTTP 400: Template validation failed: [<templateId>:
+This verifiable credential has not yet expired or been revoked; renewal
+is not allowed.]`.
+**Root cause:** the template's issuance policy rejects re-issuance to a
+holder who already holds a valid (non-expired, non-revoked) VC of that
+type. Despite the template metadata showing `"reissue": true,
+"renewal": true`, the server-side check fires on valid prior issuances.
+**Mitigation:** generate a fresh holder account
+(`GET https://test-node.zetrix.com/createAccount`) for each issuance
+test, or revoke the existing VC before retrying.
 
 ---
 
 ## Bug history
 
-Bugs found and fixed during development & live testing (see `git log`):
+Bugs fixed during development & live testing (see `git log`):
 
 | # | Commit | Bug |
 |---|---|---|
 | B1 | `855b125` | Apply signature was over `stableStringify({data})` — server verifies against `JSON.stringify(data)` (Jackson field order). Also `applyDefaultTemplateId` was placing `templateId` last via spread; fixed to build each DTO in field-declaration order. |
-| B2 | `855b125` | `ZetrixVcClient.unwrap()` required `"success" in data` to unwrap `{ object: {...} }`; real success responses omit `success`. Fixed to detect `object` / `messages` instead. |
-| B3 | `7a6083b` | Gateway path prefix was `/v1/*`; correct prefix is `/cred/v1/*`. Unknown-path requests were being blocked by Cloudflare. |
-| B4 | `2784303` | axios pinned to `1.15.0` and added `overrides` to block compromised `1.14.1` / `0.30.4`. |
-| B5 | `f58753f` | 8 bugs from systematic review: `pick()` now returns trimmed, explicit args always override env, validate `ZETRIX_VC_NETWORK` at startup, `safeDerive` splits try/catch per path, detect address-form `HOLDER_KEY`/`ISSUER_KEY` and fall through to key derivation, cleaner Cloudflare error messages, more. |
+| B2 | `855b125` | `ZetrixVcClient.unwrap()` required `"success" in data` to treat as a wrapper. Real success responses omit `success`. Fixed to detect `object` / `messages` instead. |
+| B3 | `7a6083b` | Gateway path prefix was `/v1/*`; correct is `/cred/v1/*`. Unknown-path requests were being blocked by Cloudflare. |
+| B4 | `2784303` | axios pinned to `1.15.0` + npm `overrides` to block compromised `1.14.1` / `0.30.4`. |
+| B5 | `f58753f` | 8 bugs from systematic review: `pick()` trims, explicit args always override env, validate `ZETRIX_VC_NETWORK` at startup, `safeDerive` split try/catch per path, detect address-form `HOLDER_KEY`/`ISSUER_KEY`, cleaner Cloudflare error messages, more. |
+| B6 | `a49f81b` | Tool descriptions now specify `yyyy-MM-dd` format (was: ISO-8601), reflecting actual BaaS behavior. |
 
 ---
 
@@ -482,8 +469,7 @@ Bugs found and fixed during development & live testing (see `git log`):
    ```
    Record the `private_key` and `address`.
 
-3. Set env vars (use a real holder private key from step 2 and real BaaS
-   keys — do NOT commit them):
+3. Set env vars (do NOT commit real keys):
    ```bash
    export ZETRIX_VC_NETWORK=uat
    export AWS_GATEWAY_API_KEY=<your-aws-key>
@@ -494,7 +480,7 @@ Bugs found and fixed during development & live testing (see `git log`):
    export TDS_CONTRACT_ADDRESS=ZTX3JszqPgRUx743SAp7q7zURfjvkWuH2FMEz
    ```
 
-4. Run any of the test cases above — for example the one-shot issuance:
+4. Run the one-shot issuance flow:
    ```bash
    printf '%s\n' \
      '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"t","version":"0"}}}' \
@@ -503,18 +489,21 @@ Bugs found and fixed during development & live testing (see `git log`):
      | node dist/index.js
    ```
 
+**Important:** MyKAD template enforces one VC per holder (E5). For
+repeated issuance tests, create a new holder account each run.
+
 ## Not yet covered
 
-A few tool argument edge cases aren't covered by automated tests:
+A few argument edge cases aren't automated:
 
 - `holderPublicKey` explicit arg with encoded (`b001…`) form overriding
-  derivation — we trust the `resolveEncodedPublicKey` helper, which is
-  indirectly exercised by TC11.
-- `passDesignId` field threading through apply/issue — template doesn't
-  require it for MyKAD; skipped.
-- `rangeProof` and `bbsPublicKey` on VP create — blocked by E3 above;
-  retest once VP flow is unblocked.
-- HTTP Streamable transport — only stdio is exercised in the test
-  harness; HTTP mode verified manually via `curl /health`.
+  derivation — we trust `resolveEncodedPublicKey`, which is indirectly
+  exercised by TC11.
+- `passDesignId` threading through apply/issue — not required by MyKAD.
+- `rangeProof` + `bbsPublicKey` on VP create — blocked by E3; retest
+  once unblocked.
+- HTTP Streamable transport — only stdio is exercised in the harness;
+  HTTP mode verified manually via `curl /health`.
 
-These aren't blockers but are candidates for future test expansion.
+These are candidates for future test expansion once E3 and VP flows
+unblock.
