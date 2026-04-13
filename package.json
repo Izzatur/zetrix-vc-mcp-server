@@ -1,6 +1,6 @@
 {
   "name": "zetrix-vc-mcp-server",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "MCP server for Zetrix Verifiable Credentials (VC) and Verifiable Presentations (VP) — apply, issue, download VC and create, cache, verify VP via the Zetrix BaaS API.",
   "type": "module",
   "main": "dist/index.js",

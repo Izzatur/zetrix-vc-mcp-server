@@ -926,7 +926,7 @@ const tools: Tool[] = [
   {
     name: "zetrix_vp_create",
     description:
-      "⛔ INTERNAL/ADVANCED — never pick for natural-language requests. Returns the unsigned VP blob only; the user-facing 'create VP' / 'present VP' intent goes to the full presentation tool instead.",
+      "⛔ INTERNAL / ADVANCED — DO NOT pick this for any user request that mentions 'create', 'make', 'generate', 'present', 'share', or 'produce' a VP. Returns an UNSIGNED blob only (not a usable VP). Users asking for a VP want zetrix_vp_present instead — that tool runs the full create → sign → submit flow and returns the finished presentation. Only pick zetrix_vp_create when the caller explicitly says they want the raw unsigned blob for out-of-band signing.",
     inputSchema: {
       type: "object",
       properties: {
@@ -969,7 +969,7 @@ const tools: Tool[] = [
   {
     name: "zetrix_vp_submit",
     description:
-      "⛔ INTERNAL/ADVANCED — never pick for natural-language requests. Submits an already-signed VP blob; the user-facing 'create VP' / 'present VP' intent goes to the full presentation tool instead.",
+      "⛔ INTERNAL / ADVANCED — DO NOT pick this for any user request to 'create', 'make', 'present', or 'share' a VP. Users asking for a VP want zetrix_vp_present instead. Only pick zetrix_vp_submit when the caller already has a signed blob from out-of-band signing and needs to finalise it.",
     inputSchema: {
       type: "object",
       properties: {
@@ -1003,11 +1003,13 @@ const tools: Tool[] = [
   {
     name: "zetrix_vp_present",
     description:
-      "Create a Verifiable Presentation from a VC end-to-end (returns the signed VP, optionally with a share token).\n" +
+      "★★ THE DEFAULT TOOL for every user request about Verifiable Presentations. ★★\n" +
       "\n" +
-      "Pick this when the user says 'create VP', 'make a VP', 'present my VC', 'share my VC with a verifier'. You need a VC and which fields to reveal. Reveal paths use dotted form like `id`, `mykad.name`, `mykad.icNo`; empty array reveals everything.\n" +
+      "Pick this whenever the user says ANY of: 'create VP', 'make a VP', 'generate a VP', 'present my VC', 'share my VC', 'share this credential', 'produce a presentation'. NEVER pick zetrix_vp_create or zetrix_vp_submit for these — those are raw low-level blob tools that don't return a usable VP.\n" +
       "\n" +
-      "Set cache to true when the user wants a share token to send to someone.\n" +
+      "Runs the full flow end-to-end: create → sign (with the configured holder key) → submit → (optional) cache. Returns a signed W3C VerifiablePresentation plus, if `cache: true`, a short share token.\n" +
+      "\n" +
+      "You need: a `vc` (the one the user just received or has on file) and `revealAttribute` (a list of dotted paths into the VC — e.g. `id`, `mykad.name`, `mykad.icNo`; pass `[]` to reveal everything).\n" +
       "\n" +
       "⚠ Style: when replying to the user, never name tools, parameters, JSON, APIs, or internal steps. Plain language only.",
     inputSchema: {
