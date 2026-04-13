@@ -1,420 +1,346 @@
 # Zetrix VC MCP Server
 
-A Model Context Protocol (MCP) server that exposes the **Zetrix BaaS Verifiable
-Credentials (VC) / Verifiable Presentations (VP)** API as tools for MCP clients
-(Claude, IDE integrations, custom agents).
+A Model Context Protocol (MCP) server for the **Zetrix BaaS Verifiable Credentials** API. Provides **20 tools** across 6 categories — VC issuance (apply / issue / download), Verifiable Presentations, revocation, DID generation & resolution, and on-chain template lookup. Supports both **stdio** and **HTTP** transport modes.
 
-Wraps the `myeg-ms-credential` service routed through the Zetrix BaaS gateway:
+Wraps the `myeg-ms-credential` service exposed through the Zetrix BaaS gateway under `/cred/v1/*`.
 
-| Network | Base URL                         |
-|---------|----------------------------------|
-| UAT     | `https://api-sandbox.zetrix.com` |
-| Prod    | `https://api.zetrix.com`         |
-
-Full API contract and endpoint reference is documented in the Zetrix BaaS internal docs.
-
-## Supported Flows
-
-| # | Flow               | Endpoint                   | Actor             | Tool                  |
-|---|--------------------|----------------------------|-------------------|-----------------------|
-| 1 | Apply VC           | `POST /cred/v1/vc/apply`   | Holder            | `zetrix_vc_apply`     |
-| 2 | Issue VC           | `POST /cred/v1/vc/issue`   | Issuer            | `zetrix_vc_issue`     |
-| 3 | Download VC *(after 1 & 2)* | `POST /cred/v1/vc/download`| Holder / Issuer   | `zetrix_vc_download`  |
-| 4 | Create VP (blob)   | `POST /cred/v1/vp/create`  | Holder            | `zetrix_vp_create`    |
-| 5 | Submit VP (signed) | `POST /cred/v1/vp/submit`  | Holder            | `zetrix_vp_submit`    |
-| 6 | Present VP (combo) | create+sign+submit         | Holder            | `zetrix_vp_present`   |
-| 7 | Cache VP           | `POST /cred/v1/vp/cache`   | Holder            | `zetrix_vp_cache`     |
-| 8 | Verify VP          | `POST /cred/v1/vp/verify`  | Verifier          | `zetrix_vp_verify`    |
-| 9 | Revoke VC (flow 3) | 3-step signed flow         | Issuer            | `zetrix_vc_revoke` (combo) + `zetrix_vc_revoke_create_blob` / `zetrix_vc_revoke_submit` / `zetrix_vc_revoke_status` |
-| 10 | Full issuance (flow 1 multi-step) | 5-step with separate BBS+ sign | Issuer | `zetrix_vc_create` / `zetrix_vc_sign_bbs` / `zetrix_vc_submit` |
-
-> **VC flow ordering:** The BaaS enforces `apply → issue → download`
-> strictly in that order. Calling `download` on an `apply` `vcId`
-> before the issuer has processed it returns
-> `HTTP 400: The VC application has not been issued yet`. For one-shot
-> holder-side issuance, use `zetrix_vc_request_credential` — it
-> orchestrates all three steps for you.
-> For revocation, use the `zetrix_vc_revoke` combo which runs
-> create-blob → sign → submit in the correct order.
-
-Plus:
-
-- `zetrix_vc_version` — diagnostics (effective network / base URLs / env status).
-- `zetrix_vc_get_template_detail` — fetches a template record from the on-chain
-  TDS contract via `GET <NODE>/getAccountMetaData?address=<TDS_CONTRACT_ADDRESS>&key=template__<templateId>`.
-  Falls back to `DEFAULT_TEMPLATE_ID` / `TDS_CONTRACT_ADDRESS` when args omitted.
-- `zetrix_vc_request_credential` — **one-shot issuance flow**. Fetches the
-  template from TDS, validates `metadata` against the required attributes in
-  `applyFormat`, then runs apply → issue → download and returns the final W3C
-  JSON-LD `VerifiableCredential`. If any mandatory attribute is missing, the
-  tool returns an error listing the missing keys (with their human-readable
-  names) so the agent can ask the user for them and retry. Use this when the
-  user says "issue me a VC" / "give me a credential".
-- `zetrix_vc_generate_did` — generate a Zetrix DID (`did:zid:<rawPubKey>`)
-  from a private key, encoded public key, or raw public key. Useful for
-  discovering "what is my DID" without any network call.
-- `zetrix_vc_resolve_did` — resolve a DID to its **DID document** via the
-  Zetrix ZID resolver (`GET /1.0/identifiers/<did>`). Surfaces the
-  `didDocument` (verification methods, service endpoints, permissions) plus
-  resolution metadata. Defaults to the holder's generated DID when called with
-  no arguments.
-
-## Install & Build
+## Quick Start
 
 ```bash
-npm install
-npm run build
+npx zetrix-vc-mcp-server
 ```
 
-The build step is required — the MCP server runs from `dist/index.js`.
-
-## Running the Server
-
-The server supports two transports. **Where the env vars live depends on
-which you pick** — see [Environment Variables](#environment-variables) below.
-
-### Option 1 — stdio transport (recommended for single-user / desktop clients)
-
-With stdio, the **MCP client spawns the server as a child process** every time
-it connects. You don't run the server yourself — the client does. Just build
-once and point your client config at `dist/index.js`.
+Or install globally:
 
 ```bash
-npm start                    # manual run, for smoke-testing only
+npm install -g zetrix-vc-mcp-server
 ```
 
-For real use, register it with your MCP client using one of the config files in
-[`configs/`](configs/):
-
-- `mcp-config-uat.json` — connects to `https://api-sandbox.zetrix.com`
-- `mcp-config-prod.json` — connects to `https://api.zetrix.com`
-
-Both set `env` on the client side — see [Placing env vars](#placing-env-vars)
-for what lands where.
-
-### Option 2 — HTTP transport (recommended for shared / remote deployments)
-
-With HTTP, you start the server **once, yourself**, and clients connect to a
-URL. Secrets live on the **server** side.
-
-```bash
-# foreground
-npm run start:http
-
-# or with explicit env (no .env file — see "Placing env vars" below)
-ZETRIX_VC_TRANSPORT=http \
-ZETRIX_VC_PORT=3000 \
-ZETRIX_VC_NETWORK=uat \
-AWS_GATEWAY_API_KEY=your-aws-key \
-BAAS_API_KEY=your-baas-key \
-HOLDER_PRIVATE_KEY=... \
-ISSUER_PRIVATE_KEY=... \
-node dist/index.js
-```
-
-On startup you'll see:
-
-```
-Zetrix VC MCP Server running on http://localhost:3000/mcp (network=uat, baseUrl=https://api-sandbox.zetrix.com)
-```
-
-Endpoints:
-
-| Path     | Method | Purpose                                                  |
-|----------|--------|----------------------------------------------------------|
-| `/health`| GET    | Status JSON (version, network, base URL, active sessions)|
-| `/mcp`   | POST   | MCP Streamable HTTP — all JSON-RPC traffic               |
-
-Verify it's up:
-
-```bash
-curl -s http://localhost:3000/health | jq .
-```
-
-Register it with an MCP client by URL (no `env` block needed client-side):
-
-```bash
-# Claude Code
-claude mcp add --transport http zetrix-vc-uat http://localhost:3000/mcp
-```
-
-Or in a client config:
-
-```json
-{ "mcpServers": { "zetrix-vc-uat": { "type": "http", "url": "http://localhost:3000/mcp" } } }
-```
-
-⚠️ `/mcp` has **no built-in authentication** — don't expose it on the public
-internet without a reverse proxy (nginx/Caddy) terminating TLS and enforcing
-auth. The keys in env are used for *outbound* BaaS calls only.
-
-## Environment Variables
-
-| Variable                | Required | Description                                                                 |
-|-------------------------|----------|-----------------------------------------------------------------------------|
-| `ZETRIX_VC_NETWORK`     | no       | `uat` (default) or `prod` — selects the BaaS base URL.                       |
-| `ZETRIX_VC_BASE_URL`    | no       | Explicit BaaS base URL override.                                             |
-| `ZETRIX_VC_TRANSPORT`   | no       | `stdio` (default) or `http`.                                                 |
-| `ZETRIX_VC_PORT`        | no       | Port for HTTP transport (default `3000`).                                    |
-| `AWS_GATEWAY_API_KEY`   | yes\*    | Sent as `x-api-key`.                                                         |
-| `BAAS_API_KEY`          | yes\*    | Sent as `Authorization: Bearer <key>`.                                       |
-| `ISSUER_KEY`            | no       | Issuer public identifier. Either a Zetrix address (`ZTX3…`) for display, or an encoded Ed25519 public key (`b001…`, 76 hex chars). Only the `b001…` form is usable for DID derivation / as a BaaS `publicKey` value; an address triggers derivation from `ISSUER_PRIVATE_KEY` instead. |
-| `ISSUER_PRIVATE_KEY`    | †        | Required for `zetrix_vc_issue` (unless passed per-call).                     |
-| `ISSUER_DID`            | no       | Issuer DID. If omitted, generated as `did:zid:<rawPubKey>` from `ISSUER_KEY` (when `b001…`) or `ISSUER_PRIVATE_KEY`. |
-| `HOLDER_KEY`            | no       | Holder public identifier — address (`ZTX3…`) or encoded pubkey (`b001…`, 76 hex chars). Only the `b001…` form is used as an API `publicKey`; an address triggers derivation from `HOLDER_PRIVATE_KEY`. |
-| `HOLDER_PRIVATE_KEY`    | †        | Required for apply / download / VP flows (unless passed per-call).           |
-| `HOLDER_DID`            | no       | Holder DID. If omitted, generated as `did:zid:<rawPubKey>` from `HOLDER_KEY` (when `b001…`) or `HOLDER_PRIVATE_KEY`. |
-| `DEFAULT_TEMPLATE_ID`   | no       | Fallback `templateId` used by `zetrix_vc_apply` / `zetrix_vc_issue` when a caller omits it on a `data[]` item. |
-| `TDS_CONTRACT_ADDRESS`  | no       | Template Data Store contract address. Used by `zetrix_vc_get_template_detail`. |
-| `RCL_CONTRACT_ADDRESS`  | no       | Revocation Contract List address (reserved for revocation lookups).          |
-| `ZETRIX_NODE_BASE_URL`  | no       | Override for the node RPC. Defaults by network: uat → `https://test-node.zetrix.com`, prod → `https://node.zetrix.com`. |
-| `ZETRIX_ZID_RESOLVER_URL` | no     | Override for the ZID DID resolver. Defaults by network: uat → `https://zid-resolver-sandbox.zetrix.com`, prod → `https://zid-resolver.zetrix.com`. |
-
-\* Required whenever the Zetrix BaaS gateway enforces the keys.
-† Private keys may alternatively be passed as tool arguments to avoid storing
-them in the environment.
-
-### Placing env vars
-
-**The env vars must live where the server *process* runs.** That's a different
-place depending on transport:
-
-| Transport | Who starts the server?    | Where do env vars live?                                  |
-|-----------|---------------------------|----------------------------------------------------------|
-| stdio     | The MCP client, per call  | **Client-side config** — in the `env` block of `mcp-config-*.json` |
-| http      | You, once                 | **Server-side** — shell env / systemd unit / `.env` / container env |
-
-#### stdio — client-side config
-
-The server is launched on demand by the client; it has no persistent `.env`.
-Put the keys in the `env` block of your client's MCP config. Examples:
-
-- Claude Desktop: `~/Library/Application Support/Claude/claude_desktop_config.json` (mac), `%APPDATA%\Claude\claude_desktop_config.json` (win)
-- Claude Code: `~/.claude.json`
-- Cursor: `~/.cursor/mcp.json`
-
-Use [`configs/mcp-config-uat.json`](configs/mcp-config-uat.json) or
-[`configs/mcp-config-prod.json`](configs/mcp-config-prod.json) as a template
-— copy the `mcpServers` block into your client config and fill in values:
+Minimum configuration — add to your MCP client's config (see [Claude Desktop](#claude-desktop) / [Claude Code](#claude-code-cli) below):
 
 ```json
 {
   "mcpServers": {
-    "zetrix-vc-uat": {
-      "command": "node",
-      "args": ["/absolute/path/to/zetrix-vc-mcp-server/dist/index.js"],
+    "zetrix-vc": {
+      "command": "npx",
+      "args": ["-y", "zetrix-vc-mcp-server"],
       "env": {
         "ZETRIX_VC_NETWORK": "uat",
-        "AWS_GATEWAY_API_KEY": "...",
-        "BAAS_API_KEY": "...",
-        "HOLDER_PRIVATE_KEY": "...",
-        "ISSUER_PRIVATE_KEY": "...",
-        "DEFAULT_TEMPLATE_ID": "did:zid:...",
-        "TDS_CONTRACT_ADDRESS": "ZTX..."
+        "AWS_GATEWAY_API_KEY": "<your AWS API Gateway key>",
+        "BAAS_API_KEY": "<your Zetrix BaaS key>",
+        "ISSUER_PRIVATE_KEY": "<issuer ed25519 private key>",
+        "HOLDER_PRIVATE_KEY": "<holder ed25519 private key>",
+        "DEFAULT_TEMPLATE_ID": "did:zid:…"
       }
     }
   }
 }
 ```
 
-A `.env` file in this repo is **not read** in stdio mode.
+## Features (20 tools)
 
-#### http — server-side
+### General (1 tool)
 
-The server runs as a long-lived process that you start yourself. Pick any of:
+| Tool | Description |
+|---|---|
+| `zetrix_vc_version` | Server version, effective network / base URL, env status |
 
-**1. Inline on the command line (easiest for testing):**
+### DID Utilities (2 tools)
 
-```bash
-ZETRIX_VC_TRANSPORT=http AWS_GATEWAY_API_KEY=... BAAS_API_KEY=... \
-HOLDER_PRIVATE_KEY=... ISSUER_PRIVATE_KEY=... node dist/index.js
-```
+| Tool | Description |
+|---|---|
+| `zetrix_vc_generate_did` | Generate a DID (`did:zid:<rawPubKey>`) from a private / public / raw pubkey. No network call |
+| `zetrix_vc_resolve_did` | Resolve a DID to its DID document (verification methods, service endpoints, permissions) via the Zetrix ZID resolver |
 
-**2. `.env` file + shell export (dev loop):**
+### Template Lookup (1 tool)
 
-Copy the template and fill in values:
+| Tool | Description |
+|---|---|
+| `zetrix_vc_get_template_detail` | Fetch a VC template (incl. required fields, label + format) from the on-chain Template Data Store contract |
 
-```bash
-cp .env.example .env
-# edit .env
-set -a; source .env; set +a     # export every line into the shell
-npm run start:http
-```
+### VC Issuance (8 tools)
 
-The server itself does **not** auto-load `.env` — you must export it before
-running node. (Ask if you'd like `dotenv` wired up so `node dist/index.js`
-reads `.env` automatically.)
+The **preferred** entrypoint is `zetrix_vc_request_credential` — it orchestrates apply → issue → download in one call and writes the final VC to a JSON file on disk. The other tools expose individual steps for advanced integrations.
 
-**3. systemd unit (production):**
+| Tool | Description |
+|---|---|
+| `zetrix_vc_request_credential` | **End-to-end: apply → issue → download → save .json**. Use when the user says "apply VC for me" / "issue me a VC" / "create VC for me" |
+| `zetrix_vc_apply` | Holder applies for a VC — creates pending application only |
+| `zetrix_vc_issue` | Issuer directly issues a VC to a specific holder (by DID, pubkey, or privkey). Returns signed VC |
+| `zetrix_vc_download` | Download an already-issued VC by `vcId`; saves as `.json` on disk |
+| `zetrix_vc_create` | *(Advanced)* Multi-step Flow 1 — prepare canonical VC payload for BBS+ and Ed25519 signing |
+| `zetrix_vc_sign_bbs` | *(Advanced)* Sign canonical statements with issuer BBS+ keys |
+| `zetrix_vc_submit` | *(Advanced)* Finalise issuance by submitting both signatures |
 
-```ini
-# /etc/systemd/system/zetrix-vc-mcp.service
-[Unit]
-Description=Zetrix VC MCP Server
-After=network.target
+### VC Revocation (4 tools)
 
-[Service]
-Type=simple
-User=armmarov
-WorkingDirectory=/home/armmarov/work/projects/zetrix-vc-mcp-server
-EnvironmentFile=/home/armmarov/work/projects/zetrix-vc-mcp-server/.env
-Environment=ZETRIX_VC_TRANSPORT=http
-Environment=ZETRIX_VC_PORT=3000
-ExecStart=/usr/bin/node dist/index.js
-Restart=on-failure
+| Tool | Description |
+|---|---|
+| `zetrix_vc_revoke` | **One-shot revocation: create-blob → sign → submit**. Destructive — recorded on-chain permanently |
+| `zetrix_vc_revoke_create_blob` | *(Advanced)* Step 1 — request hex-encoded revocation blob |
+| `zetrix_vc_revoke_submit` | *(Advanced)* Step 3 — submit the signed blob |
+| `zetrix_vc_revoke_status` | Query whether a VC is revoked (read-only) |
 
-[Install]
-WantedBy=multi-user.target
-```
+### Verifiable Presentations (5 tools)
 
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable --now zetrix-vc-mcp
-journalctl -u zetrix-vc-mcp -f     # tail logs
-```
+| Tool | Description |
+|---|---|
+| `zetrix_vp_present` | **End-to-end VP: create → sign → submit (+ optional cache)**. Use when the user says "create VP" / "present my VC" |
+| `zetrix_vp_create` | *(Advanced)* Returns the unsigned VP blob only |
+| `zetrix_vp_submit` | *(Advanced)* Submit an already-signed VP blob |
+| `zetrix_vp_cache` | Cache a signed VP and get a short share uuid to send to a verifier |
+| `zetrix_vp_verify` | Verifier validates a VP. Accepts either the full VP object **or** a share uuid |
 
-**4. Docker / container env:** pass env vars via `-e` flags or a compose file.
+## Supported Networks
 
-### Override semantics
+| Network | BaaS Gateway | Node RPC | ZID Resolver |
+|---|---|---|---|
+| UAT (sandbox) | `https://api-sandbox.zetrix.com` | `https://test-node.zetrix.com` | `https://zid-resolver-sandbox.zetrix.com` |
+| Prod | `https://api.zetrix.com` | `https://node.zetrix.com` | `https://zid-resolver.zetrix.com` |
 
-Every holder/issuer credential field has matching tool arguments — when passed,
-they **always override** the environment. Empty strings in env (e.g. placeholder
-values in config templates) are treated as "not set" so they don't block the
-explicit arg.
+## Configuration
 
-| Env var                | Overriding tool arg                                |
-|------------------------|----------------------------------------------------|
-| `HOLDER_PRIVATE_KEY`   | `holderPrivateKey` (apply / download / vp_* / request_credential) |
-| `HOLDER_KEY`           | `holderPublicKey` (apply / request_credential), `ed25519PubKey` (vp_*) |
-| `HOLDER_DID`           | `holderDid` (issue / request_credential) — else generated from keys |
-| `ISSUER_DID`           | (diagnostic) — generated from keys when not set   |
-| `ISSUER_PRIVATE_KEY`   | `issuerPrivateKey` (issue / download with `isIssuer:true` / request_credential) |
-| `TDS_CONTRACT_ADDRESS` | `tdsContractAddress` (get_template_detail)        |
-| `DEFAULT_TEMPLATE_ID`  | `templateId` on each `data[]` item, or top-level on get_template_detail |
+### Environment Variables
 
-## How signing works
+| Variable | Description | Default |
+|---|---|---|
+| `ZETRIX_VC_NETWORK` | Network (`uat` or `prod`) | `uat` |
+| `ZETRIX_VC_BASE_URL` | Custom BaaS gateway URL (overrides network default) | — |
+| `ZETRIX_VC_TRANSPORT` | Transport mode (`stdio` or `http`) | `stdio` |
+| `ZETRIX_VC_PORT` | HTTP server port (only when `ZETRIX_VC_TRANSPORT=http`) | `3000` |
+| `AWS_GATEWAY_API_KEY` | AWS API Gateway key (sent as `x-api-key`) | — |
+| `BAAS_API_KEY` | Zetrix BaaS API key (sent as `Authorization: Bearer …`) | — |
+| `ISSUER_KEY` | Issuer Zetrix address or encoded pubkey (informational) | — |
+| `ISSUER_PRIVATE_KEY` | Issuer Ed25519 private key (56-char `priv…` form) | — |
+| `ISSUER_DID` | Issuer DID (`did:zid:…`); derived from keys if unset | — |
+| `HOLDER_KEY` | Holder Zetrix address or encoded pubkey (informational) | — |
+| `HOLDER_PRIVATE_KEY` | Holder Ed25519 private key | — |
+| `HOLDER_DID` | Holder DID (`did:zid:…`); derived from keys if unset | — |
+| `DEFAULT_TEMPLATE_ID` | Default template id used when a call omits `templateId` | — |
+| `TDS_CONTRACT_ADDRESS` | Template Data Store contract address | — |
+| `RCL_CONTRACT_ADDRESS` | Revocation Contract List address | — |
+| `ZETRIX_NODE_BASE_URL` | Custom node RPC URL (overrides network default) | — |
+| `ZETRIX_ZID_RESOLVER_URL` | Custom ZID resolver URL (overrides network default) | — |
+| `ZETRIX_VC_DOWNLOAD_DIR` | Default directory for saved VC `.json` files (supports `~`) | CWD |
 
-All BaaS VC/VP flows use **Ed25519** signatures. This server uses
-`zetrix-encryption-nodejs` (the same library as the main Zetrix MCP server) to
-sign canonicalised payloads:
+### Secure Credentials (Recommended)
 
-- `zetrix_vc_apply` — signs a canonical JSON of `{ data }` with the holder's key.
-- `zetrix_vc_download` — signs `vcId` with the holder's (or issuer's) key.
-- `zetrix_vp_submit` / `zetrix_vp_present` — signs the server-returned `blob`
-  with the holder's key.
-
-If you'd rather sign externally and submit the signature, every tool accepts
-pre-computed signature fields (`signData` / `ed25519SignData` / `signVcId`).
-
-## DID generation and resolution
-
-Zetrix DIDs have the form `did:zid:<rawPubKey>` where `<rawPubKey>` is the raw
-32-byte Ed25519 public key as hex. The server distinguishes two operations:
-
-- **Generate** (`zetrix_vc_generate_did`) — build the DID string locally from
-  your key material. No network call. Falls back through:
-  `privateKey` / `publicKey` / `rawPublicKey` args →
-  `HOLDER_*` or `ISSUER_*` env vars.
-- **Resolve** (`zetrix_vc_resolve_did`) — fetch the on-chain **DID document**
-  from the ZID resolver. The DID document lists the verification methods,
-  service endpoints, and permissions associated with the DID.
-
-```
-UAT:  https://zid-resolver-sandbox.zetrix.com/1.0/identifiers/<did>
-Prod: https://zid-resolver.zetrix.com/1.0/identifiers/<did>
-```
-
-If holder/issuer DIDs are not explicitly set via `HOLDER_DID` / `ISSUER_DID`,
-they are generated automatically from the corresponding key env vars, so you
-only need to provide the private key in most setups.
-
-Example — discover your own DID:
-
-```json
-{ "name": "zetrix_vc_generate_did", "arguments": { "role": "holder" } }
-// -> { "did": "did:zid:4e5fe94…", "source": "HOLDER_PRIVATE_KEY env" }
-```
-
-Example — inspect the DID document (permissions / services):
-
-```json
-{ "name": "zetrix_vc_resolve_did", "arguments": {} }  // defaults to holder DID
-// or explicit
-{ "name": "zetrix_vc_resolve_did", "arguments": { "did": "did:zid:acfdbaa6…" } }
-```
-
-## One-shot issuance — `zetrix_vc_request_credential`
-
-When the user says *"issue me a driving-license credential"*, call this tool
-and let it handle the template lookup, attribute validation, apply, issue and
-download:
-
-```json
-// Agent first call — probe for required attributes
-{
-  "name": "zetrix_vc_request_credential",
-  "arguments": { "metadata": {} }
-}
-```
-
-Response (error with the required-attribute list):
-
-```
-Cannot issue VC — template "DrivingLicense" requires these attributes that are missing or empty in `metadata`:
-  - name (Name, String)
-  - icNo (IC Number, String)
-  - class (Class, String)
-  - issueDate (License Issue Date, String)
-  - expiryDate (License Expiry Date, String)
-  - address (Address, String)
-  - nationality (Nationality, String)
-```
-
-After gathering the values from the user, retry with them filled in:
+By setting keys as environment variables, the LLM never needs to see or handle the raw secrets. The server uses them silently; users can refer to the holder/issuer as "me" without mentioning keys.
 
 ```json
 {
-  "name": "zetrix_vc_request_credential",
-  "arguments": {
-    "metadata": {
-      "name": "Ahmad bin Abdullah",
-      "icNo": "900101-01-1234",
-      "class": "D",
-      "issueDate": "2020-01-01",
-      "expiryDate": "2030-01-01",
-      "address": "Kuala Lumpur",
-      "nationality": "Malaysian"
+  "mcpServers": {
+    "zetrix-vc": {
+      "command": "npx",
+      "args": ["-y", "zetrix-vc-mcp-server"],
+      "env": {
+        "ZETRIX_VC_NETWORK": "uat",
+        "AWS_GATEWAY_API_KEY": "…",
+        "BAAS_API_KEY": "…",
+        "ISSUER_PRIVATE_KEY": "…",
+        "HOLDER_PRIVATE_KEY": "…",
+        "DEFAULT_TEMPLATE_ID": "did:zid:…",
+        "TDS_CONTRACT_ADDRESS": "ZTX3…"
+      }
     }
   }
 }
 ```
 
-Response returns the final W3C JSON-LD VerifiableCredential plus wallet-pass
-images (`vcPassBase64`) and the vcId from the apply step.
+> **Note:** Every credential can also be passed per-call via tool arguments (`issuerPrivateKey`, `holderPublicKey`, etc.). Explicit arguments always override env values. Addresses like `ZTX3…` cannot be used as DIDs — the tool will reject them and ask for the DID / public key / private key instead.
 
-## End-to-end example
+### Claude Code (CLI)
 
-```text
-Holder                       Issuer                     Verifier
-  │                            │                           │
-  │── zetrix_vc_apply ────────▶│                           │
-  │◀── { vcId, status }────────│                           │
-  │                            │                           │
-  │                            │── zetrix_vc_issue ───────▶│  (or auto after apply)
-  │                            │                           │
-  │── zetrix_vc_download ─────▶│                           │
-  │◀── { vc, vcPassBase64 }────│                           │
-  │                            │                           │
-  │── zetrix_vp_present (cache:true) ──────────────────────│
-  │◀── { vp, cache.uuid }                                  │
-  │                                                        │
-  │──── share uuid / vp ──────────────────────────────────▶│
-  │                                                        │── zetrix_vp_verify
-  │                                                        │◀── { isVerified, vcDetail }
+Add the MCP server directly from the command line:
+
+**UAT (sandbox):**
+```bash
+claude mcp add zetrix-vc-uat -s user -- npx -y zetrix-vc-mcp-server \
+  -e ZETRIX_VC_NETWORK=uat \
+  -e AWS_GATEWAY_API_KEY=<aws-key> \
+  -e BAAS_API_KEY=<baas-key> \
+  -e ISSUER_PRIVATE_KEY=<issuer-priv> \
+  -e HOLDER_PRIVATE_KEY=<holder-priv> \
+  -e DEFAULT_TEMPLATE_ID=<did:zid:…> \
+  -e TDS_CONTRACT_ADDRESS=<ZTX3…>
 ```
 
-## Related
+**Prod:**
+```bash
+claude mcp add zetrix-vc -s user -- npx -y zetrix-vc-mcp-server \
+  -e ZETRIX_VC_NETWORK=prod \
+  -e AWS_GATEWAY_API_KEY=<aws-key> \
+  -e BAAS_API_KEY=<baas-key> \
+  -e ISSUER_PRIVATE_KEY=<issuer-priv> \
+  -e HOLDER_PRIVATE_KEY=<holder-priv>
+```
 
-- Zetrix blockchain MCP server (accounts, transactions, contracts):
-  [`zetrix-mcp-server`](https://www.npmjs.com/package/zetrix-mcp-server)
-- Zetrix BaaS documentation: [https://docs.zetrix.com](https://docs.zetrix.com)
+### Claude Desktop
+
+Edit your Claude Desktop configuration file:
+
+- **macOS:** `~/Library/Application Support/Claude/claude_desktop_config.json`
+- **Windows:** `%APPDATA%\Claude\claude_desktop_config.json`
+- **Linux:** `~/.config/Claude/claude_desktop_config.json`
+
+**UAT (sandbox):**
+```json
+{
+  "mcpServers": {
+    "zetrix-vc-uat": {
+      "command": "npx",
+      "args": ["-y", "zetrix-vc-mcp-server"],
+      "env": {
+        "ZETRIX_VC_NETWORK": "uat",
+        "AWS_GATEWAY_API_KEY": "<aws-key>",
+        "BAAS_API_KEY": "<baas-key>",
+        "ISSUER_PRIVATE_KEY": "<issuer-priv>",
+        "HOLDER_PRIVATE_KEY": "<holder-priv>",
+        "DEFAULT_TEMPLATE_ID": "did:zid:…",
+        "TDS_CONTRACT_ADDRESS": "ZTX3…"
+      }
+    }
+  }
+}
+```
+
+**Prod:**
+```json
+{
+  "mcpServers": {
+    "zetrix-vc": {
+      "command": "npx",
+      "args": ["-y", "zetrix-vc-mcp-server"],
+      "env": {
+        "ZETRIX_VC_NETWORK": "prod",
+        "AWS_GATEWAY_API_KEY": "<aws-key>",
+        "BAAS_API_KEY": "<baas-key>",
+        "ISSUER_PRIVATE_KEY": "<issuer-priv>",
+        "HOLDER_PRIVATE_KEY": "<holder-priv>"
+      }
+    }
+  }
+}
+```
+
+**Both networks:**
+```json
+{
+  "mcpServers": {
+    "zetrix-vc-uat":  { "command": "npx", "args": ["-y", "zetrix-vc-mcp-server"], "env": { "ZETRIX_VC_NETWORK": "uat",  "…": "…" } },
+    "zetrix-vc-prod": { "command": "npx", "args": ["-y", "zetrix-vc-mcp-server"], "env": { "ZETRIX_VC_NETWORK": "prod", "…": "…" } }
+  }
+}
+```
+
+After saving, restart Claude Desktop for changes to take effect. See ready-made templates in [`configs/`](configs/).
+
+### HTTP Transport (API Server)
+
+Run the MCP server as an HTTP API using the Streamable HTTP transport — useful for remote MCP clients or shared team deployments.
+
+**Start the server:**
+```bash
+ZETRIX_VC_TRANSPORT=http ZETRIX_VC_PORT=3000 \
+  ZETRIX_VC_NETWORK=uat \
+  AWS_GATEWAY_API_KEY=<aws-key> \
+  BAAS_API_KEY=<baas-key> \
+  ISSUER_PRIVATE_KEY=<issuer-priv> \
+  HOLDER_PRIVATE_KEY=<holder-priv> \
+  npx zetrix-vc-mcp-server
+```
+
+**Endpoints:**
+
+| Endpoint | Method | Description |
+|---|---|---|
+| `/mcp` | POST | MCP protocol endpoint (Streamable HTTP, session-aware) |
+| `/health` | GET | Health check — returns `{ status, version, network, baseUrl, activeSessions }` |
+
+**Connect from an MCP client:**
+```json
+{
+  "mcpServers": {
+    "zetrix-vc": {
+      "type": "http",
+      "url": "http://localhost:3000/mcp"
+    }
+  }
+}
+```
+
+> ⚠️ The `/mcp` endpoint has no built-in authentication. Do not expose it on the public internet without a reverse proxy (nginx/Caddy) terminating TLS and enforcing auth. The BaaS / AWS keys in env are used for outbound calls only.
+
+**Server logs:** go to stderr. Run foreground to watch, or redirect:
+
+```bash
+# Foreground
+ZETRIX_VC_TRANSPORT=http ZETRIX_VC_PORT=3000 npx zetrix-vc-mcp-server
+
+# Background with logs
+ZETRIX_VC_TRANSPORT=http ZETRIX_VC_PORT=3000 npx zetrix-vc-mcp-server 2> server.log &
+tail -f server.log
+```
+
+## End-to-End Example
+
+Once configured, simply ask the LLM to do what you want — the agent discovers required fields via the tool itself and asks only for what it needs.
+
+```
+You:    apply VC for me
+
+Agent:  I need your Full Name, IC Number, and MyDigitalID Expiry Date.
+
+You:    Ahmad bin Abdullah, 900101-01-1234, 2030-01-01
+
+Agent:  Done. Your VC has been issued. Saved to ~/mykad-a7fb32898f6a.json.
+        (VC id: did:zid:a7fb32898f6ab6b55e40af533745972e10a276701ac96a463693ce5034ea5e1d)
+```
+
+Behind the scenes:
+1. Agent calls the issuance tool with no arguments → tool returns the required template fields.
+2. Agent asks user for those specific fields.
+3. Agent calls again with the answers → tool runs apply → issue → download → writes the VC file.
+4. `validUntil` defaults to +1 year unless the user specifies otherwise.
+
+## Development
+
+### Project Structure
+
+```
+zetrix-vc-mcp-server/
+├── src/
+│   ├── index.ts                # MCP server (20 tool definitions + handlers)
+│   ├── zetrix-vc-client.ts     # BaaS HTTP client (/cred/v1/*)
+│   ├── zetrix-vc-signer.ts     # Ed25519 signing (sign / signHex / DID derivation)
+│   ├── zetrix-node-client.ts   # Zetrix public node RPC (template lookup)
+│   └── zetrix-zid-resolver.ts  # DID document resolver
+├── configs/
+│   ├── mcp-config-uat.json     # Claude Desktop template for UAT
+│   └── mcp-config-prod.json    # Claude Desktop template for prod
+├── docs/
+│   └── TEST_SUITE.md           # Live UAT test suite (31 test cases)
+└── dist/                       # Compiled output (gitignored)
+```
+
+### Build
+
+```bash
+npm install
+npm run build
+```
+
+### Run from source
+
+```bash
+npm start                 # stdio transport
+npm run start:http        # HTTP transport on port 3000
+```
+
+### Test
+
+See [`docs/TEST_SUITE.md`](docs/TEST_SUITE.md) for the full test suite and live-verified results against the UAT BaaS.
+
+## License
+
+MIT

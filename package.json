@@ -45,6 +45,15 @@
     "name": "Zetrix",
     "email": "dev@zetrix.com"
   },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Zetrix-Chain/zetrix-vc-mcp-server.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Zetrix-Chain/zetrix-vc-mcp-server/issues"
+  },
+  "homepage": "https://github.com/Zetrix-Chain/zetrix-vc-mcp-server#readme",
+  "mcpName": "io.github.zetrix-chain/zetrix-vc-mcp-server",
   "license": "MIT",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.23.0",
