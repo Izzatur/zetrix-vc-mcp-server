@@ -63,6 +63,7 @@ Copy `.env.example` to `.env` (or set these in your MCP client's `env` block):
 | `ISSUER_PRIVATE_KEY`    | †        | Required for `zetrix_vc_issue` (unless passed per-call).                     |
 | `HOLDER_KEY`            | no       | Holder public key. If omitted, derived from `HOLDER_PRIVATE_KEY`.            |
 | `HOLDER_PRIVATE_KEY`    | †        | Required for apply / download / VP flows (unless passed per-call).          |
+| `DEFAULT_TEMPLATE_ID`   | no       | Fallback `templateId` used by `zetrix_vc_apply` / `zetrix_vc_issue` when a caller omits it on a `data[]` item. |
 
 \* Required whenever the Zetrix BaaS gateway enforces the keys.
 † Private keys may alternatively be passed as tool arguments (`issuerPrivateKey`,

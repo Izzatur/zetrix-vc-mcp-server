@@ -45,6 +45,8 @@ const ISSUER_PRIVATE_KEY = process.env.ISSUER_PRIVATE_KEY;
 const HOLDER_KEY = process.env.HOLDER_KEY;
 const HOLDER_PRIVATE_KEY = process.env.HOLDER_PRIVATE_KEY;
 
+const DEFAULT_TEMPLATE_ID = process.env.DEFAULT_TEMPLATE_ID;
+
 const vcClient = new ZetrixVcClient({
   network: ZETRIX_VC_NETWORK,
   baseUrl: ZETRIX_VC_BASE_URL,
@@ -66,6 +68,26 @@ function requireEnv(value: string | undefined, name: string, arg?: string): stri
     );
   }
   return resolved;
+}
+
+/**
+ * Fill in `templateId` on each TemplateMetadataDto from DEFAULT_TEMPLATE_ID
+ * when the caller didn't supply one. If no default is set and an item is
+ * missing `templateId`, throw.
+ */
+function applyDefaultTemplateId(data: TemplateMetadataDto[]): TemplateMetadataDto[] {
+  return data.map((item, idx) => {
+    if (item && typeof item.templateId === "string" && item.templateId.length > 0) {
+      return item;
+    }
+    if (!DEFAULT_TEMPLATE_ID) {
+      throw new Error(
+        `data[${idx}].templateId is missing and DEFAULT_TEMPLATE_ID is not set. ` +
+          `Either include a templateId per item or configure DEFAULT_TEMPLATE_ID in the environment.`
+      );
+    }
+    return { ...item, templateId: DEFAULT_TEMPLATE_ID };
+  });
 }
 
 function toTextResult(payload: unknown) {
@@ -113,11 +135,16 @@ const tools: Tool[] = [
         data: {
           type: "array",
           description:
-            "List of TemplateMetadataDto — the VC template(s) + claim metadata to apply for.",
+            "List of TemplateMetadataDto — the VC template(s) + claim metadata to apply for. " +
+            "`templateId` may be omitted on any item; DEFAULT_TEMPLATE_ID from the environment will be used as fallback.",
           items: {
             type: "object",
             properties: {
-              templateId: { type: "string", description: "VC template identifier" },
+              templateId: {
+                type: "string",
+                description:
+                  "VC template identifier. If omitted, DEFAULT_TEMPLATE_ID env var is used.",
+              },
               passDesignId: { type: "string", description: "Pass design identifier (optional)" },
               metadata: {
                 type: "object",
@@ -126,7 +153,7 @@ const tools: Tool[] = [
               },
               tds: { type: "string", description: "Template Data Store reference (optional)" },
             },
-            required: ["templateId", "metadata"],
+            required: ["metadata"],
           },
         },
         holderPrivateKey: {
@@ -160,16 +187,22 @@ const tools: Tool[] = [
         },
         data: {
           type: "array",
-          description: "List of TemplateMetadataDto — template(s) + claim metadata for the VC.",
+          description:
+            "List of TemplateMetadataDto — template(s) + claim metadata for the VC. " +
+            "`templateId` may be omitted on any item; DEFAULT_TEMPLATE_ID env var is used as fallback.",
           items: {
             type: "object",
             properties: {
-              templateId: { type: "string" },
+              templateId: {
+                type: "string",
+                description:
+                  "VC template identifier. If omitted, DEFAULT_TEMPLATE_ID env var is used.",
+              },
               passDesignId: { type: "string" },
               metadata: { type: "object", additionalProperties: true },
               tds: { type: "string" },
             },
-            required: ["templateId", "metadata"],
+            required: ["metadata"],
           },
         },
         issuanceDate: {
@@ -442,14 +475,18 @@ function registerHandlers(server: Server) {
               holderKey: HOLDER_KEY ? "set" : "missing",
               holderPrivateKey: HOLDER_PRIVATE_KEY ? "set" : "missing",
             },
+            defaults: {
+              templateId: DEFAULT_TEMPLATE_ID ?? null,
+            },
           });
         }
 
         case "zetrix_vc_apply": {
-          const data = args.data as TemplateMetadataDto[] | undefined;
-          if (!data || !Array.isArray(data) || data.length === 0) {
+          const rawData = args.data as TemplateMetadataDto[] | undefined;
+          if (!rawData || !Array.isArray(rawData) || rawData.length === 0) {
             throw new Error("`data` must be a non-empty array of TemplateMetadataDto.");
           }
+          const data = applyDefaultTemplateId(rawData);
           const holderPrivateKey = requireEnv(
             HOLDER_PRIVATE_KEY,
             "HOLDER_PRIVATE_KEY",
@@ -475,10 +512,11 @@ function registerHandlers(server: Server) {
         case "zetrix_vc_issue": {
           const holderDid = args.holderDid as string | undefined;
           if (!holderDid) throw new Error("`holderDid` is required.");
-          const data = args.data as TemplateMetadataDto[] | undefined;
-          if (!data || !Array.isArray(data) || data.length === 0) {
+          const rawData = args.data as TemplateMetadataDto[] | undefined;
+          if (!rawData || !Array.isArray(rawData) || rawData.length === 0) {
             throw new Error("`data` must be a non-empty array of TemplateMetadataDto.");
           }
+          const data = applyDefaultTemplateId(rawData);
           const issuerPrivateKey = requireEnv(
             ISSUER_PRIVATE_KEY,
             "ISSUER_PRIVATE_KEY",
