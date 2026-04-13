@@ -13,7 +13,9 @@
         "ISSUER_PRIVATE_KEY": "issuer-ed25519-private-key-56-chars",
         "HOLDER_KEY": "holder-ed25519-public-key",
         "HOLDER_PRIVATE_KEY": "holder-ed25519-private-key-56-chars",
-        "DEFAULT_TEMPLATE_ID": ""
+        "DEFAULT_TEMPLATE_ID": "",
+        "TDS_CONTRACT_ADDRESS": "",
+        "RCL_CONTRACT_ADDRESS": ""
       }
     }
   }

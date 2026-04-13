@@ -26,7 +26,12 @@ See [`VC_VP_API_REFERENCE.md`](VC_VP_API_REFERENCE.md) for the full API contract
 | 7 | Cache VP           | `POST /v1/vp/cache`   | Holder            | `zetrix_vp_cache`     |
 | 8 | Verify VP          | `POST /v1/vp/verify`  | Verifier          | `zetrix_vp_verify`    |
 
-Plus `zetrix_vc_version` for diagnostics.
+Plus:
+
+- `zetrix_vc_version` — diagnostics (effective network / base URLs / env status).
+- `zetrix_vc_get_template_detail` — fetches a template record from the on-chain
+  TDS contract via `GET <NODE>/getAccountMetaData?address=<TDS_CONTRACT_ADDRESS>&key=template__<templateId>`.
+  Falls back to `DEFAULT_TEMPLATE_ID` / `TDS_CONTRACT_ADDRESS` when args omitted.
 
 ## Install & Build
 
@@ -64,6 +69,9 @@ Copy `.env.example` to `.env` (or set these in your MCP client's `env` block):
 | `HOLDER_KEY`            | no       | Holder public key. If omitted, derived from `HOLDER_PRIVATE_KEY`.            |
 | `HOLDER_PRIVATE_KEY`    | †        | Required for apply / download / VP flows (unless passed per-call).          |
 | `DEFAULT_TEMPLATE_ID`   | no       | Fallback `templateId` used by `zetrix_vc_apply` / `zetrix_vc_issue` when a caller omits it on a `data[]` item. |
+| `TDS_CONTRACT_ADDRESS`  | no       | Template Data Store contract address. Used by `zetrix_vc_get_template_detail`. |
+| `RCL_CONTRACT_ADDRESS`  | no       | Revocation Contract List address (reserved for revocation lookups). |
+| `ZETRIX_NODE_BASE_URL`  | no       | Override for the node RPC. Defaults by network: uat → `https://test-node.zetrix.com`, prod → `https://node.zetrix.com`. |
 
 \* Required whenever the Zetrix BaaS gateway enforces the keys.
 † Private keys may alternatively be passed as tool arguments (`issuerPrivateKey`,

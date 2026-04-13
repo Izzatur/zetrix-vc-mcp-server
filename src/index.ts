@@ -25,6 +25,10 @@ import {
   VerifiablePresentation,
 } from "./zetrix-vc-client.js";
 import { ZetrixVcSigner, stableStringify } from "./zetrix-vc-signer.js";
+import {
+  ZetrixNodeClient,
+  ZETRIX_NODE_BASE_URLS,
+} from "./zetrix-node-client.js";
 
 // -------------------------------------------------------------------------
 // Configuration
@@ -47,11 +51,23 @@ const HOLDER_PRIVATE_KEY = process.env.HOLDER_PRIVATE_KEY;
 
 const DEFAULT_TEMPLATE_ID = process.env.DEFAULT_TEMPLATE_ID;
 
+// Contract addresses — on-chain stores for credential templates and revocation state.
+const TDS_CONTRACT_ADDRESS = process.env.TDS_CONTRACT_ADDRESS;
+const RCL_CONTRACT_ADDRESS = process.env.RCL_CONTRACT_ADDRESS;
+
+// Zetrix public node RPC — used to resolve template / RCL metadata on-chain.
+const ZETRIX_NODE_BASE_URL = process.env.ZETRIX_NODE_BASE_URL;
+
 const vcClient = new ZetrixVcClient({
   network: ZETRIX_VC_NETWORK,
   baseUrl: ZETRIX_VC_BASE_URL,
   awsApiKey: AWS_GATEWAY_API_KEY,
   baasApiKey: BAAS_API_KEY,
+});
+
+const nodeClient = new ZetrixNodeClient({
+  network: ZETRIX_VC_NETWORK,
+  baseUrl: ZETRIX_NODE_BASE_URL,
 });
 
 const signer = new ZetrixVcSigner();
@@ -119,6 +135,34 @@ const tools: Tool[] = [
     description:
       "Get the current version, network (uat/prod) and effective base URL of the Zetrix VC MCP server.",
     inputSchema: { type: "object", properties: {}, required: [] },
+  },
+
+  // --------------------- VC: Template lookup ---------------------
+  {
+    name: "zetrix_vc_get_template_detail",
+    description:
+      "Fetch a VC template record from the on-chain Template Data Store (TDS). " +
+      "Calls the Zetrix node RPC: GET /getAccountMetaData?address=<TDS_CONTRACT_ADDRESS>&key=template__<templateId>. " +
+      "If `templateId` is not provided, DEFAULT_TEMPLATE_ID from the environment is used. " +
+      "If `tdsContractAddress` is not provided, TDS_CONTRACT_ADDRESS from the environment is used. " +
+      "The node base URL is selected from ZETRIX_VC_NETWORK (uat → test-node.zetrix.com, prod → node.zetrix.com) " +
+      "or the explicit ZETRIX_NODE_BASE_URL override. Returns the raw metadata value plus a parsed JSON form when possible.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        templateId: {
+          type: "string",
+          description:
+            "Template id (e.g. did:zid:...). Defaults to DEFAULT_TEMPLATE_ID env var when omitted.",
+        },
+        tdsContractAddress: {
+          type: "string",
+          description:
+            "TDS contract address to query. Defaults to TDS_CONTRACT_ADDRESS env var when omitted.",
+        },
+      },
+      required: [],
+    },
   },
 
   // --------------------- VC: Apply (holder) ---------------------
@@ -478,7 +522,30 @@ function registerHandlers(server: Server) {
             defaults: {
               templateId: DEFAULT_TEMPLATE_ID ?? null,
             },
+            contracts: {
+              tdsContractAddress: TDS_CONTRACT_ADDRESS ?? null,
+              rclContractAddress: RCL_CONTRACT_ADDRESS ?? null,
+            },
+            node: {
+              baseUrl: nodeClient.baseUrl,
+              defaultBaseUrls: ZETRIX_NODE_BASE_URLS,
+            },
           });
+        }
+
+        case "zetrix_vc_get_template_detail": {
+          const templateId = requireEnv(
+            DEFAULT_TEMPLATE_ID,
+            "templateId (or DEFAULT_TEMPLATE_ID)",
+            args.templateId as string | undefined
+          );
+          const tdsContractAddress = requireEnv(
+            TDS_CONTRACT_ADDRESS,
+            "tdsContractAddress (or TDS_CONTRACT_ADDRESS)",
+            args.tdsContractAddress as string | undefined
+          );
+          const detail = await nodeClient.getTemplateDetail(tdsContractAddress, templateId);
+          return toTextResult(detail);
         }
 
         case "zetrix_vc_apply": {
