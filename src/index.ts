@@ -437,9 +437,9 @@ const tools: Tool[] = [
       "(1) fetches the template record from the on-chain TDS contract to learn the required attributes, " +
       "(2) validates `metadata` contains every mandatory attribute — if any are missing, returns an error " +
       "listing them so the agent can ask the user for the values before retrying, " +
-      "(3) holder applies for the VC (POST /v1/vc/apply), " +
-      "(4) issuer issues the VC to `holderDid` (POST /v1/vc/issue), " +
-      "(5) holder downloads the final signed VC (POST /v1/vc/download), and " +
+      "(3) holder applies for the VC (POST /cred/v1/vc/apply), " +
+      "(4) issuer issues the VC to `holderDid` (POST /cred/v1/vc/issue), " +
+      "(5) holder downloads the final signed VC (POST /cred/v1/vc/download), and " +
       "(6) returns the W3C JSON-LD VerifiableCredential. " +
       "Use this when the user asks 'issue me a VC' / 'give me a credential' — it hides the multi-step " +
       "orchestration. Env fallbacks: templateId → DEFAULT_TEMPLATE_ID, holderDid → HOLDER_DID, " +
@@ -514,7 +514,7 @@ const tools: Tool[] = [
       "Holder applies for a Verifiable Credential from an issuer. Signs the canonicalised request payload with the holder's Ed25519 private key. " +
       "The holder's public key + signature are included so the issuer can verify the application. " +
       "Explicit `holderPrivateKey` / `holderPublicKey` args override HOLDER_PRIVATE_KEY / HOLDER_KEY from the environment. " +
-      "Maps to POST /v1/vc/apply.",
+      "Maps to POST /cred/v1/vc/apply.",
     inputSchema: {
       type: "object",
       properties: {
@@ -564,7 +564,7 @@ const tools: Tool[] = [
       "Issuer issues a Verifiable Credential directly to a holder DID in a single call (create + sign + submit). " +
       "Explicit `issuerPrivateKey` arg overrides ISSUER_PRIVATE_KEY from the environment. " +
       "`holderDid` resolution order: explicit arg → HOLDER_DID env → derived from holderPublicKey/HOLDER_KEY → derived from holderPrivateKey/HOLDER_PRIVATE_KEY (did:zid:<rawPubKey>). " +
-      "Maps to POST /v1/vc/issue.",
+      "Maps to POST /cred/v1/vc/issue.",
     inputSchema: {
       type: "object",
       properties: {
@@ -641,7 +641,7 @@ const tools: Tool[] = [
       "Holder downloads an issued VC. The `vcId` is signed with the holder's (or issuer's, when `isIssuer=true`) Ed25519 private key to prove ownership. " +
       "Explicit args override the environment: `holderPrivateKey` overrides HOLDER_PRIVATE_KEY; `issuerPrivateKey` overrides ISSUER_PRIVATE_KEY. " +
       "Set `isIssuer: true` when the issuer (not the holder) is downloading. " +
-      "Maps to POST /v1/vc/download.",
+      "Maps to POST /cred/v1/vc/download.",
     inputSchema: {
       type: "object",
       properties: {
@@ -683,7 +683,7 @@ const tools: Tool[] = [
     description:
       "Holder creates a Verifiable Presentation blob from a VC, selecting which attributes to reveal. " +
       "Returns `blobId` and `blob` — the canonicalised payload the holder must sign. " +
-      "Maps to POST /v1/vp/create.",
+      "Maps to POST /cred/v1/vp/create.",
     inputSchema: {
       type: "object",
       properties: {
@@ -723,7 +723,7 @@ const tools: Tool[] = [
       "Holder returns the signed VP blob to the server, which assembles the final VerifiablePresentation. " +
       "If `ed25519SignData` is omitted, this tool signs `blob` with the resolved holder private key. " +
       "Explicit `holderPrivateKey` / `ed25519PubKey` args override HOLDER_PRIVATE_KEY / HOLDER_KEY from the environment. " +
-      "Maps to POST /v1/vp/submit.",
+      "Maps to POST /cred/v1/vp/submit.",
     inputSchema: {
       type: "object",
       properties: {
@@ -760,7 +760,7 @@ const tools: Tool[] = [
       "Convenience flow for the holder: create a VP blob, sign it with the holder's Ed25519 private key, " +
       "submit it, and (optionally) cache it to get a share uuid. " +
       "Explicit `holderPrivateKey` / `ed25519PubKey` args override HOLDER_PRIVATE_KEY / HOLDER_KEY from the environment. " +
-      "Combines POST /v1/vp/create → sign → POST /v1/vp/submit → POST /v1/vp/cache (optional).",
+      "Combines POST /cred/v1/vp/create → sign → POST /cred/v1/vp/submit → POST /cred/v1/vp/cache (optional).",
     inputSchema: {
       type: "object",
       properties: {
@@ -793,7 +793,7 @@ const tools: Tool[] = [
         cache: {
           type: "boolean",
           description:
-            "If true, also caches the signed VP via POST /v1/vp/cache and returns the share uuid. Default false.",
+            "If true, also caches the signed VP via POST /cred/v1/vp/cache and returns the share uuid. Default false.",
         },
       },
       required: ["vc"],
@@ -805,7 +805,7 @@ const tools: Tool[] = [
     name: "zetrix_vp_cache",
     description:
       "Holder caches a signed VP on the server and receives a short uuid to share with a verifier. " +
-      "Maps to POST /v1/vp/cache.",
+      "Maps to POST /cred/v1/vp/cache.",
     inputSchema: {
       type: "object",
       properties: {
@@ -824,7 +824,7 @@ const tools: Tool[] = [
     name: "zetrix_vp_verify",
     description:
       "Verifier validates a VerifiablePresentation. Returns isVerified + per-VC disclosed claims. " +
-      "Maps to POST /v1/vp/verify.",
+      "Maps to POST /cred/v1/vp/verify.",
     inputSchema: {
       type: "object",
       properties: {

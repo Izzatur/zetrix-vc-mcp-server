@@ -1,16 +1,20 @@
 /**
  * HTTP client for the Zetrix BaaS Verifiable Credentials / Presentations API.
  *
- * Endpoints follow VC_VP_API_REFERENCE.md (myeg-ms-credential service routed
- * through the Zetrix BaaS gateway):
+ * Endpoints are routed through the Zetrix BaaS gateway under the `/cred/v1/`
+ * prefix (the gateway dispatches to the myeg-ms-credential service internally):
  *
- *   POST /v1/vc/apply       — Holder applies for a VC
- *   POST /v1/vc/issue       — Issuer issues a VC directly to a holder DID
- *   POST /v1/vc/download    — Holder downloads an issued VC
- *   POST /v1/vp/create      — Holder creates a VP blob (pre-sign)
- *   POST /v1/vp/submit      — Holder submits the signed VP blob
- *   POST /v1/vp/cache       — Holder caches a signed VP, receives share uuid
- *   POST /v1/vp/verify      — Verifier validates a VP
+ *   POST /cred/v1/vc/apply       — Holder applies for a VC
+ *   POST /cred/v1/vc/issue       — Issuer issues a VC directly to a holder DID
+ *   POST /cred/v1/vc/download    — Holder downloads an issued VC
+ *   POST /cred/v1/vp/create      — Holder creates a VP blob (pre-sign)
+ *   POST /cred/v1/vp/submit      — Holder submits the signed VP blob
+ *   POST /cred/v1/vp/cache       — Holder caches a signed VP, receives share uuid
+ *   POST /cred/v1/vp/verify      — Verifier validates a VP
+ *
+ * Note: VC_VP_API_REFERENCE.md documents the local service paths as
+ * `/v1/vc/*` and `/v1/vp/*`; the public gateway exposes them under
+ * `/cred/v1/*`. Customers always use the `/cred/v1/*` form.
  *
  * Authentication:
  *   - AWS API Gateway key — sent as `x-api-key`
@@ -196,39 +200,39 @@ export class ZetrixVcClient {
     });
   }
 
-  /** POST /v1/vc/apply */
+  /** POST /cred/v1/vc/apply */
   async applyVc(req: ApplyVcReqDto): Promise<ApplyVcRespDto> {
-    return this.post<ApplyVcRespDto>("/v1/vc/apply", req);
+    return this.post<ApplyVcRespDto>("/cred/v1/vc/apply", req);
   }
 
-  /** POST /v1/vc/issue */
+  /** POST /cred/v1/vc/issue */
   async issueVc(req: IssueDirectVcReqDto): Promise<SubmitVcRespDto> {
-    return this.post<SubmitVcRespDto>("/v1/vc/issue", req);
+    return this.post<SubmitVcRespDto>("/cred/v1/vc/issue", req);
   }
 
-  /** POST /v1/vc/download */
+  /** POST /cred/v1/vc/download */
   async downloadVc(req: DownloadVcReqDto): Promise<SubmitVcRespDto> {
-    return this.post<SubmitVcRespDto>("/v1/vc/download", req);
+    return this.post<SubmitVcRespDto>("/cred/v1/vc/download", req);
   }
 
-  /** POST /v1/vp/create */
+  /** POST /cred/v1/vp/create */
   async createVp(req: CreateVpReqDto): Promise<CreateVpRespDto> {
-    return this.post<CreateVpRespDto>("/v1/vp/create", req);
+    return this.post<CreateVpRespDto>("/cred/v1/vp/create", req);
   }
 
-  /** POST /v1/vp/submit */
+  /** POST /cred/v1/vp/submit */
   async submitVp(req: SubmitVpReqDto): Promise<VerifiablePresentation> {
-    return this.post<VerifiablePresentation>("/v1/vp/submit", req);
+    return this.post<VerifiablePresentation>("/cred/v1/vp/submit", req);
   }
 
-  /** POST /v1/vp/cache */
+  /** POST /cred/v1/vp/cache */
   async cacheVp(req: CacheVpReqDto): Promise<CacheVpRespDto> {
-    return this.post<CacheVpRespDto>("/v1/vp/cache", req);
+    return this.post<CacheVpRespDto>("/cred/v1/vp/cache", req);
   }
 
-  /** POST /v1/vp/verify */
+  /** POST /cred/v1/vp/verify */
   async verifyVp(req: VerifyVpReqDto): Promise<VerifyVpRespDto> {
-    return this.post<VerifyVpRespDto>("/v1/vp/verify", req);
+    return this.post<VerifyVpRespDto>("/cred/v1/vp/verify", req);
   }
 
   // ----- internals -----

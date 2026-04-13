@@ -15,16 +15,16 @@ See [`VC_VP_API_REFERENCE.md`](VC_VP_API_REFERENCE.md) for the full API contract
 
 ## Supported Flows
 
-| # | Flow               | Endpoint              | Actor             | Tool                  |
-|---|--------------------|-----------------------|-------------------|-----------------------|
-| 1 | Apply VC           | `POST /v1/vc/apply`   | Holder            | `zetrix_vc_apply`     |
-| 2 | Issue VC           | `POST /v1/vc/issue`   | Issuer            | `zetrix_vc_issue`     |
-| 3 | Download VC        | `POST /v1/vc/download`| Holder / Issuer   | `zetrix_vc_download`  |
-| 4 | Create VP (blob)   | `POST /v1/vp/create`  | Holder            | `zetrix_vp_create`    |
-| 5 | Submit VP (signed) | `POST /v1/vp/submit`  | Holder            | `zetrix_vp_submit`    |
-| 6 | Present VP (combo) | create+sign+submit    | Holder            | `zetrix_vp_present`   |
-| 7 | Cache VP           | `POST /v1/vp/cache`   | Holder            | `zetrix_vp_cache`     |
-| 8 | Verify VP          | `POST /v1/vp/verify`  | Verifier          | `zetrix_vp_verify`    |
+| # | Flow               | Endpoint                   | Actor             | Tool                  |
+|---|--------------------|----------------------------|-------------------|-----------------------|
+| 1 | Apply VC           | `POST /cred/v1/vc/apply`   | Holder            | `zetrix_vc_apply`     |
+| 2 | Issue VC           | `POST /cred/v1/vc/issue`   | Issuer            | `zetrix_vc_issue`     |
+| 3 | Download VC        | `POST /cred/v1/vc/download`| Holder / Issuer   | `zetrix_vc_download`  |
+| 4 | Create VP (blob)   | `POST /cred/v1/vp/create`  | Holder            | `zetrix_vp_create`    |
+| 5 | Submit VP (signed) | `POST /cred/v1/vp/submit`  | Holder            | `zetrix_vp_submit`    |
+| 6 | Present VP (combo) | create+sign+submit         | Holder            | `zetrix_vp_present`   |
+| 7 | Cache VP           | `POST /cred/v1/vp/cache`   | Holder            | `zetrix_vp_cache`     |
+| 8 | Verify VP          | `POST /cred/v1/vp/verify`  | Verifier          | `zetrix_vp_verify`    |
 
 Plus:
 
