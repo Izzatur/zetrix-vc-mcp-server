@@ -432,6 +432,26 @@ resolver cache is stale).
 `#controllerKey` verification method registered with the public key
 used to sign issued VCs. This is a one-time issuer setup, not a per-VC
 issue.
+**Ruled out as causes (verified 2026-04-13):**
+- ACL permission caching — after ACL was added, error message changed
+  from "ACL permission invalid" to the current Ed25519 verification
+  error. ACL itself is no longer blocking.
+- Missing `validUntil` — issuing a VC with `validFrom` + `validUntil`
+  set produces a VC that still fails VP-create with the same error, so
+  the absence of these fields isn't the cause.
+
+### E4 — Date-field format inconsistency (minor, documentation only)
+**Affects:** `zetrix_vc_issue` and `zetrix_vc_request_credential` when
+`issuanceDate` / `expirationDate` / `validFrom` / `validUntil` are
+supplied.
+**Observed:** the BaaS rejects ISO-8601 timestamps (e.g.
+`2026-04-13T08:03:20.235Z`) with:
+> `Invalid validFrom/issuanceDate format: <value> (expected yyyy-MM-dd, e.g., 2025-01-01)`
+Yet VC_VP_API_REFERENCE.md documents these fields as ISO-8601.
+**Observed also:** only `validFrom` / `validUntil` are preserved on the
+issued VC — `issuanceDate` / `expirationDate` are silently dropped.
+**Mitigation:** tool descriptions updated to specify `yyyy-MM-dd`.
+Worth raising with the Zetrix API team to reconcile the reference doc.
 
 ---
 

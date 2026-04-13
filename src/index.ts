@@ -494,10 +494,10 @@ const tools: Tool[] = [
           type: "string",
           description: "Optional pass design identifier attached to the credential.",
         },
-        issuanceDate: { type: "string", description: "ISO-8601 issuance date (optional)." },
-        expirationDate: { type: "string", description: "ISO-8601 expiration date (optional)." },
-        validFrom: { type: "string", description: "ISO-8601 validity start (optional)." },
-        validUntil: { type: "string", description: "ISO-8601 validity end (optional)." },
+        issuanceDate: { type: "string", description: "Issuance date in `yyyy-MM-dd` format (optional). Note: the BaaS currently returns VCs with validFrom/validUntil only; issuanceDate/expirationDate are accepted but may not appear on the issued VC." },
+        expirationDate: { type: "string", description: "Expiration date in `yyyy-MM-dd` format (optional). See `issuanceDate` note." },
+        validFrom: { type: "string", description: "Validity start in `yyyy-MM-dd` format (optional)." },
+        validUntil: { type: "string", description: "Validity end in `yyyy-MM-dd` format (optional)." },
         keyExpiry: { type: "number", description: "Key expiry (default 0)." },
         skipTemplateValidation: {
           type: "boolean",
@@ -625,19 +625,20 @@ const tools: Tool[] = [
         },
         issuanceDate: {
           type: "string",
-          description: "ISO-8601 issuance date (optional).",
+          description:
+            "Issuance date in `yyyy-MM-dd` format (optional). Note: BaaS currently returns VCs with validFrom/validUntil only; issuanceDate/expirationDate are accepted but may not appear on the issued VC.",
         },
         expirationDate: {
           type: "string",
-          description: "ISO-8601 expiration date (optional).",
+          description: "Expiration date in `yyyy-MM-dd` format (optional). See issuanceDate note.",
         },
         validFrom: {
           type: "string",
-          description: "ISO-8601 validity start (optional).",
+          description: "Validity start in `yyyy-MM-dd` format (optional).",
         },
         validUntil: {
           type: "string",
-          description: "ISO-8601 validity end (optional).",
+          description: "Validity end in `yyyy-MM-dd` format (optional).",
         },
         keyExpiry: {
           type: "number",
