@@ -310,6 +310,19 @@ export class ZetrixVcClient {
     return this.post<VerifyVpRespDto>("/cred/v1/vp/verify", req);
   }
 
+  /**
+   * GET /cred/v1/vp/verify?id=<uuid>
+   * Back-compat verify using the cache uuid from a prior `/cred/v1/vp/cache`.
+   */
+  async verifyVpByUuid(uuid: string): Promise<VerifyVpRespDto> {
+    try {
+      const resp = await this.http.get("/cred/v1/vp/verify", { params: { id: uuid } });
+      return this.unwrap<VerifyVpRespDto>("/cred/v1/vp/verify", resp.status, resp.data);
+    } catch (err) {
+      throw this.normaliseError("/cred/v1/vp/verify", err);
+    }
+  }
+
   // --- Full Flow 1 (create / bbs-sign / submit) ---
 
   /** POST /cred/v1/vc/create — step 3 of the full Flow 1 VC issuance. */

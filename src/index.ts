@@ -458,15 +458,17 @@ const tools: Tool[] = [
   {
     name: "zetrix_vc_request_credential",
     description:
-      "Issue a Verifiable Credential end-to-end (apply → issue → download). Use when the user says 'apply a VC', 'issue me a VC', 'give me a credential', or similar.\n" +
+      "End-to-end VC issuance: apply → issue → download, in one call, returning the signed W3C VerifiableCredential.\n" +
       "\n" +
-      "**MANDATORY FIRST STEP:** call this tool immediately with no arguments (`{}`) — do NOT ask the user anything first. " +
-      "If required fields are missing, the tool returns an error listing exactly which fields the template requires, with human-readable labels (e.g. 'IC Number', 'Full Name'). " +
-      "Use that list to ask the user for the specific values, then call again with `metadata` populated.\n" +
+      "★ USE THIS when the user asks to get a credential issued to themselves (the configured holder):\n" +
+      "  • 'apply VC for me'\n" +
+      "  • 'issue me a VC' / 'issue VC for me'\n" +
+      "  • 'create VC for me'\n" +
+      "  • 'give me a credential' / 'get me a VC' / 'I want my MyKAD'\n" +
       "\n" +
-      "**Do not ask the user about:** templateId, holderDid, contract addresses, keys, or 'which fields you want' — these are all handled by the tool or pre-configured. Never mention environment configuration to the user.\n" +
+      "★ DO NOT USE when the user specifies a target different from the configured holder (e.g. 'issue VC to address A' → use `zetrix_vc_issue`), or when they explicitly want only one step (e.g. 'apply only' → use `zetrix_vc_apply`; 'download only' → use `zetrix_vc_download`).\n" +
       "\n" +
-      "**What you may need to ask the user:** the claim values only (e.g. their name, IC number, expiry date) — and only AFTER calling the tool once to discover what those fields are.",
+      "★ HOW TO CALL: first turn, call with NO arguments (`{}`). The tool returns either the final VC or a `NEXT_STEP_REQUIRED` message listing exactly which claim fields to ask the user for. On the next turn, call again with `metadata` populated using the `key` names the tool listed. Never ask the user about templateId, keys, addresses, or configuration — those are preset.",
     inputSchema: {
       type: "object",
       properties: {
@@ -528,32 +530,34 @@ const tools: Tool[] = [
   {
     name: "zetrix_vc_apply",
     description:
-      "Holder applies for a Verifiable Credential — step 1 of the standard VC issuance flow. " +
-      "Returns a pending `vcId`. **For most use cases, prefer `zetrix_vc_request_credential`** which runs apply → issue → download in one call. " +
-      "Use `zetrix_vc_apply` only when you specifically need to apply without immediately issuing. Maps to POST /cred/v1/vc/apply.",
+      "Apply for a VC **only** — creates a pending application without issuing. Returns a pending `vcId` in `APPLIED` status; the VC cannot be downloaded until the issuer separately processes the application.\n" +
+      "\n" +
+      "★ USE THIS when the user explicitly wants the apply step only, without issuance:\n" +
+      "  • 'apply VC only, no need to issue'\n" +
+      "  • 'just apply, don't issue yet'\n" +
+      "  • 'create a VC application'\n" +
+      "\n" +
+      "★ DO NOT USE when the user says 'apply VC for me' without the 'only' / 'no issue' qualifier — they mean the full flow; use `zetrix_vc_request_credential` instead.",
     inputSchema: {
       type: "object",
       properties: {
+        metadata: {
+          type: "object",
+          description:
+            "Shortcut: claim values for a single-template apply. Omit to discover required fields (the tool will return NEXT_STEP_REQUIRED with the list).",
+          additionalProperties: true,
+        },
         data: {
           type: "array",
           description:
-            "List of TemplateMetadataDto — the VC template(s) + claim metadata to apply for. " +
-            "`templateId` may be omitted on any item; the configured default template is used as fallback.",
+            "Advanced: multi-template apply. Prefer `metadata` for the common single-template case.",
           items: {
             type: "object",
             properties: {
-              templateId: {
-                type: "string",
-                description:
-                  "VC template identifier. Optional — omit to use the configured default.",
-              },
-              passDesignId: { type: "string", description: "Pass design identifier (optional)" },
-              metadata: {
-                type: "object",
-                description: "Key/value claims that populate the VC",
-                additionalProperties: true,
-              },
-              tds: { type: "string", description: "Template Data Store reference (optional)" },
+              templateId: { type: "string" },
+              passDesignId: { type: "string" },
+              metadata: { type: "object", additionalProperties: true },
+              tds: { type: "string" },
             },
             required: ["metadata"],
           },
@@ -567,7 +571,7 @@ const tools: Tool[] = [
           description: "Optional per-call holder public key override. Usually omitted.",
         },
       },
-      required: ["data"],
+      required: [],
     },
   },
 
@@ -575,9 +579,15 @@ const tools: Tool[] = [
   {
     name: "zetrix_vc_issue",
     description:
-      "Issuer directly issues a VC to a holder (one call — skips the holder's apply step). " +
-      "**For most use cases, prefer `zetrix_vc_request_credential`** which also downloads the final signed VC and handles attribute validation. " +
-      "Use this when you specifically need the one-shot issuer-initiated path. Maps to POST /cred/v1/vc/issue.",
+      "Issuer directly issues a VC to a specific holder DID or address. Returns the signed VC (includes `vc.id`). Does NOT download; if the holder wants the canonical VC later, they call `zetrix_vc_download` with the returned vcId.\n" +
+      "\n" +
+      "★ USE THIS when the user specifies a target recipient different from the configured holder:\n" +
+      "  • 'issue VC to address A'\n" +
+      "  • 'issue VC to did:zid:…'\n" +
+      "  • 'issue to this holder: <address>'\n" +
+      "  • 'issue VC but don't download' (any variant where they want issuance without download)\n" +
+      "\n" +
+      "★ DO NOT USE when the user just says 'issue me a VC' / 'issue VC for me' without specifying a recipient — that means 'issue to me and complete the flow'; use `zetrix_vc_request_credential` instead.",
     inputSchema: {
       type: "object",
       properties: {
@@ -593,19 +603,20 @@ const tools: Tool[] = [
           type: "string",
           description: "Optional per-call holder private key override. Usually omitted.",
         },
+        metadata: {
+          type: "object",
+          description:
+            "Shortcut: claim values for a single-template issue. Omit to discover required fields (the tool will return NEXT_STEP_REQUIRED with the list).",
+          additionalProperties: true,
+        },
         data: {
           type: "array",
           description:
-            "List of TemplateMetadataDto — template(s) + claim metadata for the VC. " +
-            "`templateId` may be omitted on any item; the configured default template is used as fallback.",
+            "Advanced: multi-template issue. Prefer `metadata` for the common single-template case.",
           items: {
             type: "object",
             properties: {
-              templateId: {
-                type: "string",
-                description:
-                  "VC template identifier. Optional — omit to use the configured default.",
-              },
+              templateId: { type: "string" },
               passDesignId: { type: "string" },
               metadata: { type: "object", additionalProperties: true },
               tds: { type: "string" },
@@ -629,7 +640,7 @@ const tools: Tool[] = [
           description: "Optional per-call issuer private key override. Usually omitted.",
         },
       },
-      required: ["data"],
+      required: [],
     },
   },
 
@@ -637,10 +648,15 @@ const tools: Tool[] = [
   {
     name: "zetrix_vc_download",
     description:
-      "Holder downloads an issued VC. **Workflow ordering: download only works AFTER the issuer has processed the application.** " +
-      "The BaaS enforces apply → issue → download strictly in order; downloading a `vcId` that is still pending returns `HTTP 400: The VC application has not been issued yet`. " +
-      "For end-to-end issuance in a single call use `zetrix_vc_request_credential`, which runs all three steps in the correct order. " +
-      "Use `zetrix_vc_download` on its own only when the issue step has already happened out-of-band. " +
+      "Download a VC that has already been issued, given its `vcId`. Returns the canonical signed W3C VC.\n" +
+      "\n" +
+      "★ USE THIS when the user wants to retrieve an already-issued VC:\n" +
+      "  • 'download the VC for me' / 'download VC <vcId>'\n" +
+      "  • 'fetch my VC'\n" +
+      "  • 'get the VC for vcId …'\n" +
+      "\n" +
+      "★ Prerequisite: the VC must already be issued (not in the APPLIED/pending state). If the user asks for a brand-new credential, use `zetrix_vc_request_credential` instead — it runs apply → issue → download in one call.\n" +
+      "\n" +
       "Set `isIssuer: true` when the issuer (not the holder) is downloading.",
     inputSchema: {
       type: "object",
@@ -681,9 +697,8 @@ const tools: Tool[] = [
   {
     name: "zetrix_vp_create",
     description:
-      "Holder creates a Verifiable Presentation blob from a VC, selecting which attributes to reveal. " +
-      "Returns `blobId` and `blob` — the canonicalised payload the holder must sign. " +
-      "Maps to POST /cred/v1/vp/create.",
+      "⚙ LOW-LEVEL BUILDING BLOCK — returns only the unsigned VP blob. Use `zetrix_vp_present` for the full create → sign → submit flow that a user actually wants when they say 'create VP'. " +
+      "Use `zetrix_vp_create` only when you're doing custom signing out-of-band and want just the blob.",
     inputSchema: {
       type: "object",
       properties: {
@@ -726,10 +741,8 @@ const tools: Tool[] = [
   {
     name: "zetrix_vp_submit",
     description:
-      "Holder returns the signed VP blob to the server, which assembles the final VerifiablePresentation. " +
-      "If `ed25519SignData` is omitted, this tool signs `blob` with the resolved holder private key. " +
-      "`holderPrivateKey` / `ed25519PubKey` args are optional per-call overrides; usually omit them to use the configured holder. " +
-      "Maps to POST /cred/v1/vp/submit.",
+      "⚙ LOW-LEVEL BUILDING BLOCK — submits an already-signed VP blob. Use `zetrix_vp_present` for the full create → sign → submit flow that a user wants when they say 'create VP'. " +
+      "Use `zetrix_vp_submit` only when the VP blob was signed out-of-band.",
     inputSchema: {
       type: "object",
       properties: {
@@ -763,10 +776,17 @@ const tools: Tool[] = [
   {
     name: "zetrix_vp_present",
     description:
-      "Convenience flow for the holder: create a VP blob, sign it with the holder's Ed25519 private key, " +
-      "submit it, and (optionally) cache it to get a share uuid. " +
-      "`holderPrivateKey` / `ed25519PubKey` args are optional per-call overrides; usually omit them to use the configured holder. " +
-      "Combines POST /cred/v1/vp/create → sign → POST /cred/v1/vp/submit → POST /cred/v1/vp/cache (optional).",
+      "End-to-end VP creation: create blob → sign locally → submit → (optional) cache and return a share uuid. Returns the signed W3C VerifiablePresentation.\n" +
+      "\n" +
+      "★ USE THIS when the user asks to create / present / make a VP:\n" +
+      "  • 'create VP' / 'make a VP' / 'present my VC'\n" +
+      "  • 'generate a VP revealing just my name'\n" +
+      "  • 'share my VC with a verifier'\n" +
+      "\n" +
+      "★ You need: a `vc` (typically the one just issued via `zetrix_vc_request_credential`) and a `revealAttribute` list. " +
+      "revealAttribute uses dotted paths like `id`, `mykad.name`, `mykad.icNo` (format: `<camelCaseTemplateName>.<field>`). Pass `[]` to reveal everything.\n" +
+      "\n" +
+      "★ Set `cache: true` to also get a short share uuid the user can send to a verifier.",
     inputSchema: {
       type: "object",
       properties: {
@@ -829,26 +849,42 @@ const tools: Tool[] = [
   {
     name: "zetrix_vp_verify",
     description:
-      "Verifier validates a VerifiablePresentation. Returns isVerified + per-VC disclosed claims. " +
-      "Maps to POST /cred/v1/vp/verify.",
+      "Verify a Verifiable Presentation. Returns whether the VP is valid (`isVerified`) plus the disclosed claims per VC (`vcDetail`).\n" +
+      "\n" +
+      "★ USE THIS when the user wants to verify a VP:\n" +
+      "  • 'verify VP' / 'verify this VP'\n" +
+      "  • 'verify VP uuid <id>' / 'verify VP by id' — pass `uuid`\n" +
+      "  • 'verify this presentation' — pass `vp`\n" +
+      "\n" +
+      "★ Accepts EITHER:\n" +
+      "  • `vp`: the signed VP object directly (JSON-LD), OR\n" +
+      "  • `uuid`: a share-token returned by `zetrix_vp_cache` / `zetrix_vp_present(cache: true)` — the server looks up the cached VP and verifies it.\n" +
+      "\n" +
+      "Exactly one of `vp` / `uuid` is required.",
     inputSchema: {
       type: "object",
       properties: {
         vp: {
           type: "object",
-          description: "Signed VerifiablePresentation to verify.",
+          description: "Signed VerifiablePresentation to verify. Use this when you have the full VP object.",
           additionalProperties: true,
+        },
+        uuid: {
+          type: "string",
+          description:
+            "Share uuid from a prior cache (e.g. returned by `zetrix_vp_cache` or `zetrix_vp_present(cache: true)`). " +
+            "Use this when the verifier only has the share token, not the full VP.",
         },
         ed25519PubKey: {
           type: "string",
-          description: "Expected holder Ed25519 public key (optional).",
+          description: "Optional — expected holder Ed25519 public key.",
         },
         bbsPublicKey: {
           type: "string",
-          description: "Expected holder BBS+ public key (optional, selective disclosure).",
+          description: "Optional — expected holder BBS+ public key (for selective disclosure).",
         },
       },
-      required: ["vp"],
+      required: [],
     },
   },
 
@@ -1353,11 +1389,42 @@ function registerHandlers(server: Server) {
         }
 
         case "zetrix_vc_apply": {
-          const rawData = args.data as TemplateMetadataDto[] | undefined;
-          if (!rawData || !Array.isArray(rawData) || rawData.length === 0) {
-            throw new Error("`data` must be a non-empty array of TemplateMetadataDto.");
-          }
+          // If called with no data, synthesise a single-item array from the
+          // default template so the template-field discovery still works.
+          const rawData = Array.isArray(args.data) && args.data.length > 0
+            ? (args.data as TemplateMetadataDto[])
+            : ([{ metadata: (args.metadata as Record<string, unknown>) ?? {} }] as TemplateMetadataDto[]);
           const data = applyDefaultTemplateId(rawData);
+          // Discover required fields when metadata is empty — same pattern as
+          // zetrix_vc_request_credential, so the agent can probe.
+          const firstMetadata = data[0]?.metadata ?? {};
+          if (Object.keys(firstMetadata).length === 0) {
+            const tdsAddr = pick(TDS_CONTRACT_ADDRESS);
+            if (tdsAddr) {
+              try {
+                const template = await nodeClient.getTemplateDetail(tdsAddr, data[0].templateId);
+                const info = extractTemplateInfo(template.value);
+                if (info) {
+                  const missing = findMissingRequiredAttributes(firstMetadata, info);
+                  if (missing.length > 0) {
+                    const list = missing
+                      .map((m) => `  - ${m.key}  (label: "${m.attribute}", format: ${m.format})`)
+                      .join("\n");
+                    throw new Error(
+                      `NEXT_STEP_REQUIRED: the "${info.templateName ?? data[0].templateId}" template needs these fields before I can apply for the VC — ask the user for each value, then retry with \`data: [{ metadata: {...} }]\`:\n\n` +
+                        `${list}\n\n` +
+                        `Example retry:\n` +
+                        `  zetrix_vc_apply({ data: [{ metadata: { ${missing.map((m) => `"${m.key}": "<value from user>"`).join(", ")} } }] })`
+                    );
+                  }
+                }
+              } catch (e) {
+                // If probing fails (e.g. network), fall through; the BaaS will
+                // reject an empty metadata and we'll surface that error.
+                if (e instanceof Error && e.message.startsWith("NEXT_STEP_REQUIRED")) throw e;
+              }
+            }
+          }
           // Explicit args override env vars (HOLDER_PRIVATE_KEY / HOLDER_KEY).
           // HOLDER_KEY is ignored unless it's an encoded (b001…) pubkey — if
           // it's an address, we derive the pubkey from the private key.
@@ -1395,11 +1462,42 @@ function registerHandlers(server: Server) {
             privateKeyArg: args.holderPrivateKey as string | undefined,
             privateKeyEnv: HOLDER_PRIVATE_KEY,
           });
-          const rawData = args.data as TemplateMetadataDto[] | undefined;
-          if (!rawData || !Array.isArray(rawData) || rawData.length === 0) {
-            throw new Error("`data` must be a non-empty array of TemplateMetadataDto.");
-          }
+
+          // Accept either the shortcut `metadata` (single-template issue) or
+          // the advanced `data` array (multi-template).
+          const rawData = Array.isArray(args.data) && args.data.length > 0
+            ? (args.data as TemplateMetadataDto[])
+            : ([{ metadata: (args.metadata as Record<string, unknown>) ?? {} }] as TemplateMetadataDto[]);
           const data = applyDefaultTemplateId(rawData);
+
+          // Discover required template fields if metadata is empty.
+          const firstMetadata = data[0]?.metadata ?? {};
+          if (Object.keys(firstMetadata).length === 0) {
+            const tdsAddr = pick(TDS_CONTRACT_ADDRESS);
+            if (tdsAddr) {
+              try {
+                const template = await nodeClient.getTemplateDetail(tdsAddr, data[0].templateId);
+                const info = extractTemplateInfo(template.value);
+                if (info) {
+                  const missing = findMissingRequiredAttributes(firstMetadata, info);
+                  if (missing.length > 0) {
+                    const list = missing
+                      .map((m) => `  - ${m.key}  (label: "${m.attribute}", format: ${m.format})`)
+                      .join("\n");
+                    throw new Error(
+                      `NEXT_STEP_REQUIRED: the "${info.templateName ?? data[0].templateId}" template needs these fields before I can issue the VC — ask the user for each value, then retry with \`metadata\` populated:\n\n` +
+                        `${list}\n\n` +
+                        `Example retry:\n` +
+                        `  zetrix_vc_issue({ holderDid: "${holderDid}", metadata: { ${missing.map((m) => `"${m.key}": "<value from user>"`).join(", ")} } })`
+                    );
+                  }
+                }
+              } catch (e) {
+                if (e instanceof Error && e.message.startsWith("NEXT_STEP_REQUIRED")) throw e;
+              }
+            }
+          }
+
           const issuerPrivateKey = requireEnv(
             ISSUER_PRIVATE_KEY,
             "ISSUER_PRIVATE_KEY",
@@ -1582,12 +1680,22 @@ function registerHandlers(server: Server) {
 
         case "zetrix_vp_verify": {
           const vp = args.vp as VerifiablePresentation | undefined;
-          if (!vp) throw new Error("`vp` is required.");
-          const resp = await vcClient.verifyVp({
-            vp,
-            ed25519PubKey: args.ed25519PubKey as string | undefined,
-            bbsPublicKey: args.bbsPublicKey as string | undefined,
-          });
+          const uuid = pick(args.uuid as string | undefined);
+
+          if (!vp && !uuid) {
+            throw new Error("Provide either `vp` (the VP object) or `uuid` (a share token from vp_cache).");
+          }
+          if (vp && uuid) {
+            throw new Error("Provide exactly one of `vp` or `uuid`, not both.");
+          }
+
+          const resp = uuid
+            ? await vcClient.verifyVpByUuid(uuid)
+            : await vcClient.verifyVp({
+                vp: vp as VerifiablePresentation,
+                ed25519PubKey: args.ed25519PubKey as string | undefined,
+                bbsPublicKey: args.bbsPublicKey as string | undefined,
+              });
           // Server returns `verified`; surface as both `verified` and
           // `isVerified` so consumers expecting either field work.
           const verified = resp.verified ?? resp.isVerified;
