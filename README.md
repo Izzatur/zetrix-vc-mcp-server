@@ -106,8 +106,8 @@ Use these when filling in `TDS_CONTRACT_ADDRESS`, `RCL_CONTRACT_ADDRESS`, and `D
 
 | Contract | UAT | Prod |
 |---|---|---|
-| **TDS** (Template Data Store) | `ZTX3JszqPgRUx743SAp7q7zURfjvkWuH2FMEz` | `ZTX3GqJM1U6ifMPonwD4fGvrgoTKJua7b2cKX` |
-| **RCL** (Revocation Contract List) | `ZTX3Mmovq155gzrD6Medi6bC5pGKAi5Y3QMwx` | `ZTX3H5w3CR3Eih5Uucoj4taL9kenmf83imYAk` |
+| **TDS** (Template Data Store) | [`ZTX3JszqPgRUx743SAp7q7zURfjvkWuH2FMEz`](https://test-explorer.zetrix.com/account/ZTX3JszqPgRUx743SAp7q7zURfjvkWuH2FMEz) | [`ZTX3GqJM1U6ifMPonwD4fGvrgoTKJua7b2cKX`](https://explorer.zetrix.com/account/ZTX3GqJM1U6ifMPonwD4fGvrgoTKJua7b2cKX) |
+| **RCL** (Revocation Contract List) | [`ZTX3Mmovq155gzrD6Medi6bC5pGKAi5Y3QMwx`](https://test-explorer.zetrix.com/account/ZTX3Mmovq155gzrD6Medi6bC5pGKAi5Y3QMwx) | [`ZTX3H5w3CR3Eih5Uucoj4taL9kenmf83imYAk`](https://explorer.zetrix.com/account/ZTX3H5w3CR3Eih5Uucoj4taL9kenmf83imYAk) |
 
 ### Official templates
 
