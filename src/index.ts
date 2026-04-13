@@ -412,6 +412,35 @@ function expandPath(p: string): string {
 }
 
 /**
+ * Pick a sensible default directory for saving downloaded VC files.
+ *
+ * Prior behaviour was `process.cwd()`, which breaks on Claude Desktop / Windows
+ * where the MCP server is launched with CWD = `C:\Windows\System32` (protected).
+ * Now we try, in order:
+ *   1. `ZETRIX_VC_DOWNLOAD_DIR` env (caller-configured — authoritative)
+ *   2. `~/Downloads` if it exists (standard on Win / macOS / most Linux)
+ *   3. `~` (user home — always writable)
+ *   4. `process.cwd()` as a last resort
+ */
+function defaultDownloadDir(): string {
+  const fromEnv = pick(ZETRIX_VC_DOWNLOAD_DIR);
+  if (fromEnv) return expandPath(fromEnv);
+
+  const downloads = pathResolve(homedir(), "Downloads");
+  try {
+    // `existsSync` via fs/promises is async; cheaper sync check inline.
+    // Fall back silently if anything throws.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const fs = require("node:fs");
+    if (fs.existsSync(downloads) && fs.statSync(downloads).isDirectory()) {
+      return downloads;
+    }
+  } catch { /* ignore */ }
+
+  return homedir();
+}
+
+/**
  * Derive a default filename for a downloaded VC. Uses the template type
  * (`MyKAD` → `mykad`) + a short vcId suffix so multiple downloads don't
  * collide and the file is recognisable.
@@ -441,11 +470,11 @@ async function writeVcToFile(
   let target: string;
   if (explicit) {
     const expanded = expandPath(explicit);
-    target = isAbsolute(expanded) ? expanded : pathResolve(process.cwd(), expanded);
+    target = isAbsolute(expanded) ? expanded : pathResolve(homedir(), expanded);
   } else {
-    const dirArg = pick(opts.outputDir) ?? pick(ZETRIX_VC_DOWNLOAD_DIR) ?? process.cwd();
-    const expandedDir = expandPath(dirArg);
-    const resolvedDir = isAbsolute(expandedDir) ? expandedDir : pathResolve(process.cwd(), expandedDir);
+    const dirArg = pick(opts.outputDir);
+    const baseDir = dirArg ? expandPath(dirArg) : defaultDownloadDir();
+    const resolvedDir = isAbsolute(baseDir) ? baseDir : pathResolve(homedir(), baseDir);
     target = pathResolve(
       resolvedDir,
       defaultVcFilename(vc as { id?: string; type?: string[] })
@@ -474,6 +503,69 @@ function toTextResult(payload: unknown) {
       {
         type: "text" as const,
         text: typeof payload === "string" ? payload : JSON.stringify(payload, null, 2),
+      },
+    ],
+  };
+}
+
+/**
+ * Build a tool-result that delivers a VC to the caller through MULTIPLE
+ * channels so it works across every MCP client:
+ *
+ *   1. A summary text block (what humans / the agent read)
+ *   2. An embedded resource with the VC as inline JSON — UI clients
+ *      (Claude Desktop, web UIs, IDE integrations) can offer "save as" /
+ *      render it as an attached file. The `uri` is `file://` if a disk
+ *      file was written, otherwise a logical `vc://<id>` URI.
+ *   3. A raw JSON text block containing the full payload (unchanged
+ *      backwards-compat for consumers that were parsing the old format).
+ *
+ * This is critical for clients that run the MCP server with a CWD the
+ * user can't access (e.g. Claude Desktop on Windows where CWD =
+ * C:\Windows\System32) or for remote HTTP MCP deployments where files
+ * written on the server are invisible to the user.
+ */
+function toVcResult(payload: {
+  vc: Record<string, unknown>;
+  [key: string]: unknown;
+}, opts: { fileSaved?: string | null; fileSaveError?: string | null } = {}) {
+  const vc = payload.vc;
+  const vcId = typeof vc.id === "string" ? vc.id : undefined;
+  const filename = defaultVcFilename(vc as { id?: string; type?: string[] });
+  const savedPath = opts.fileSaved;
+  const saveError = opts.fileSaveError;
+
+  const summary =
+    `VC issued${vcId ? ` (${vcId})` : ""}.` +
+    (savedPath
+      ? `\nSaved to: ${savedPath}`
+      : saveError
+        ? `\n⚠ Could not save to disk (${saveError}). The VC is still available as an attached resource below — save it from your MCP client.`
+        : `\n(The VC is available as an attached resource below.)`);
+
+  // The embedded resource lets UI clients render / download the VC file.
+  const resourceUri = savedPath
+    ? `file://${savedPath}`
+    : vcId
+      ? `vc:${vcId}`
+      : `vc:${filename}`;
+
+  return {
+    content: [
+      { type: "text" as const, text: summary },
+      {
+        type: "resource" as const,
+        resource: {
+          uri: resourceUri,
+          mimeType: "application/ld+json",
+          text: JSON.stringify(vc, null, 2),
+        },
+      },
+      // Keep the full JSON payload (with apply info, pass images, etc.) so
+      // existing consumers of this tool's output keep working.
+      {
+        type: "text" as const,
+        text: JSON.stringify(payload, null, 2),
       },
     ],
   };
@@ -1516,22 +1608,26 @@ function registerHandlers(server: Server) {
                 fileSaveError = e instanceof Error ? e.message : String(e);
               }
             }
-            return toTextResult({
-              templateId,
-              templateName,
-              holderDid,
-              apply: applyResp,
-              vc: downloadResp.vc,
-              vcPassBase64: downloadResp.vcPassBase64,
-              downloadExpiryDate: downloadResp.downloadExpiryDate,
-              fileSaved,
-              ...(fileSaveError ? { fileSaveError } : {}),
-            });
+            return toVcResult(
+              {
+                templateId,
+                templateName,
+                holderDid,
+                apply: applyResp,
+                vc: downloadResp.vc as unknown as Record<string, unknown>,
+                vcPassBase64: downloadResp.vcPassBase64,
+                downloadExpiryDate: downloadResp.downloadExpiryDate,
+                fileSaved,
+                ...(fileSaveError ? { fileSaveError } : {}),
+              },
+              { fileSaved, fileSaveError }
+            );
           } catch (downloadErr) {
             // Download still failed after all retries — surface the VC from
             // the issue step so the caller has something usable.
             const msg = downloadErr instanceof Error ? downloadErr.message : String(downloadErr);
             let fileSaved: string | null = null;
+            let fileSaveError: string | null = null;
             if (args.writeFile !== false) {
               try {
                 fileSaved = await writeVcToFile(
@@ -1541,19 +1637,25 @@ function registerHandlers(server: Server) {
                     outputDir: args.outputDir as string | undefined,
                   }
                 );
-              } catch { /* ignore — non-fatal */ }
+              } catch (e) {
+                fileSaveError = e instanceof Error ? e.message : String(e);
+              }
             }
-            return toTextResult({
-              templateId,
-              templateName,
-              holderDid,
-              apply: applyResp,
-              vc: issueResp.vc,
-              vcPassBase64: issueResp.vcPassBase64,
-              downloadExpiryDate: issueResp.downloadExpiryDate,
-              fileSaved,
-              warning: `Download step failed even after retries; returning VC from the issue step instead. Download error: ${msg}`,
-            });
+            return toVcResult(
+              {
+                templateId,
+                templateName,
+                holderDid,
+                apply: applyResp,
+                vc: issueResp.vc as unknown as Record<string, unknown>,
+                vcPassBase64: issueResp.vcPassBase64,
+                downloadExpiryDate: issueResp.downloadExpiryDate,
+                fileSaved,
+                ...(fileSaveError ? { fileSaveError } : {}),
+                warning: `Download step failed even after retries; returning VC from the issue step instead. Download error: ${msg}`,
+              },
+              { fileSaved, fileSaveError }
+            );
           }
         }
 
@@ -1708,27 +1810,29 @@ function registerHandlers(server: Server) {
 
           const resp = await vcClient.downloadVc({ vcId, signVcId, isIssuer });
 
-          // Write the downloaded VC to disk unless explicitly disabled.
-          // UI clients (Claude Desktop etc.) can let the user click the path;
-          // CLI users just see the file in their cwd.
+          // Try to save the VC to disk (best-effort — protected CWDs like
+          // C:\Windows\System32 on Claude Desktop Windows will fail and
+          // that's fine; the VC is still delivered via the embedded
+          // resource below).
           let savedPath: string | null = null;
+          let saveError: string | null = null;
           if (args.writeFile !== false) {
             try {
-              savedPath = await writeVcToFile(resp.vc as unknown as Record<string, unknown>, {
-                outputPath: args.outputPath as string | undefined,
-                outputDir: args.outputDir as string | undefined,
-              });
+              savedPath = await writeVcToFile(
+                resp.vc as unknown as Record<string, unknown>,
+                {
+                  outputPath: args.outputPath as string | undefined,
+                  outputDir: args.outputDir as string | undefined,
+                }
+              );
             } catch (e) {
-              // File write failure is non-fatal — still return the VC in-band.
-              savedPath = null;
-              return toTextResult({
-                ...resp,
-                fileSaved: null,
-                fileSaveError: e instanceof Error ? e.message : String(e),
-              });
+              saveError = e instanceof Error ? e.message : String(e);
             }
           }
-          return toTextResult({ ...resp, fileSaved: savedPath });
+          return toVcResult(
+            { ...resp, fileSaved: savedPath, ...(saveError ? { fileSaveError: saveError } : {}) },
+            { fileSaved: savedPath, fileSaveError: saveError }
+          );
         }
 
         case "zetrix_vp_create": {
