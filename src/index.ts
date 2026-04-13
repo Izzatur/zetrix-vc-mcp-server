@@ -76,8 +76,28 @@ const signer = new ZetrixVcSigner();
 // Helpers
 // -------------------------------------------------------------------------
 
+/**
+ * Return the first non-empty string from the given candidates.
+ *
+ * Used to coalesce a tool argument with an environment fallback. Explicitly
+ * passed arguments ALWAYS win when they are non-empty — even if the matching
+ * env var is also set — so the caller can override the env per call. Empty
+ * strings are treated as "not set" so that placeholder values in config
+ * templates (e.g. `HOLDER_PRIVATE_KEY=""`) don't block resolution.
+ */
+function pick(...candidates: Array<string | undefined | null>): string | undefined {
+  for (const v of candidates) {
+    if (typeof v === "string" && v.trim() !== "") return v;
+  }
+  return undefined;
+}
+
+/**
+ * Resolve a value from candidates (arg first, env last). Throws a helpful
+ * error when none of the candidates has a non-empty value.
+ */
 function requireEnv(value: string | undefined, name: string, arg?: string): string {
-  const resolved = arg ?? value;
+  const resolved = pick(arg, value);
   if (!resolved) {
     throw new Error(
       `Missing ${name}. Provide it as a tool argument or set the ${name} environment variable.`
@@ -171,7 +191,7 @@ const tools: Tool[] = [
     description:
       "Holder applies for a Verifiable Credential from an issuer. Signs the canonicalised request payload with the holder's Ed25519 private key. " +
       "The holder's public key + signature are included so the issuer can verify the application. " +
-      "If `holderPrivateKey` / `holderPublicKey` are omitted, HOLDER_PRIVATE_KEY / HOLDER_KEY from the environment are used. " +
+      "Explicit `holderPrivateKey` / `holderPublicKey` args override HOLDER_PRIVATE_KEY / HOLDER_KEY from the environment. " +
       "Maps to POST /v1/vc/apply.",
     inputSchema: {
       type: "object",
@@ -203,12 +223,12 @@ const tools: Tool[] = [
         holderPrivateKey: {
           type: "string",
           description:
-            "Holder Ed25519 private key (56 chars). Defaults to HOLDER_PRIVATE_KEY env var.",
+            "Holder Ed25519 private key (56 chars). Overrides HOLDER_PRIVATE_KEY env var when provided.",
         },
         holderPublicKey: {
           type: "string",
           description:
-            "Holder Ed25519 public key. If omitted, derived from the private key. Defaults to HOLDER_KEY env var.",
+            "Holder Ed25519 public key. Overrides HOLDER_KEY env var when provided; otherwise derived from the private key.",
         },
       },
       required: ["data"],
@@ -220,7 +240,7 @@ const tools: Tool[] = [
     name: "zetrix_vc_issue",
     description:
       "Issuer issues a Verifiable Credential directly to a holder DID in a single call (create + sign + submit). " +
-      "If `issuerPrivateKey` is omitted, ISSUER_PRIVATE_KEY from the environment is used. " +
+      "Explicit `issuerPrivateKey` arg overrides ISSUER_PRIVATE_KEY from the environment. " +
       "Maps to POST /v1/vc/issue.",
     inputSchema: {
       type: "object",
@@ -272,7 +292,7 @@ const tools: Tool[] = [
         issuerPrivateKey: {
           type: "string",
           description:
-            "Issuer Ed25519 private key (56 chars). Defaults to ISSUER_PRIVATE_KEY env var.",
+            "Issuer Ed25519 private key (56 chars). Overrides ISSUER_PRIVATE_KEY env var when provided.",
         },
       },
       required: ["holderDid", "data"],
@@ -283,8 +303,8 @@ const tools: Tool[] = [
   {
     name: "zetrix_vc_download",
     description:
-      "Holder downloads an issued VC. The `vcId` is signed with the holder's Ed25519 private key to prove ownership. " +
-      "If `holderPrivateKey` is omitted, HOLDER_PRIVATE_KEY from the environment is used. " +
+      "Holder downloads an issued VC. The `vcId` is signed with the holder's (or issuer's, when `isIssuer=true`) Ed25519 private key to prove ownership. " +
+      "Explicit args override the environment: `holderPrivateKey` overrides HOLDER_PRIVATE_KEY; `issuerPrivateKey` overrides ISSUER_PRIVATE_KEY. " +
       "Set `isIssuer: true` when the issuer (not the holder) is downloading. " +
       "Maps to POST /v1/vc/download.",
     inputSchema: {
@@ -294,13 +314,24 @@ const tools: Tool[] = [
         holderPrivateKey: {
           type: "string",
           description:
-            "Holder (or issuer, when `isIssuer=true`) Ed25519 private key used to sign `vcId`. " +
-            "Defaults to HOLDER_PRIVATE_KEY env var.",
+            "Holder Ed25519 private key used to sign `vcId` when `isIssuer` is false. " +
+            "Overrides HOLDER_PRIVATE_KEY env var.",
+        },
+        issuerPrivateKey: {
+          type: "string",
+          description:
+            "Issuer Ed25519 private key used to sign `vcId` when `isIssuer` is true. " +
+            "Overrides ISSUER_PRIVATE_KEY env var.",
+        },
+        signerPrivateKey: {
+          type: "string",
+          description:
+            "Generic alias — Ed25519 private key used for signing regardless of role. Overrides both `holderPrivateKey` / `issuerPrivateKey` args when set.",
         },
         signVcId: {
           type: "string",
           description:
-            "Pre-computed signature over `vcId`. If omitted, the server will sign `vcId` using `holderPrivateKey`.",
+            "Pre-computed signature over `vcId`. If omitted, the tool will sign `vcId` using the resolved private key.",
         },
         isIssuer: {
           type: "boolean",
@@ -343,7 +374,7 @@ const tools: Tool[] = [
         ed25519PubKey: {
           type: "string",
           description:
-            "Holder Ed25519 public key. If omitted, defaults to HOLDER_KEY env var (or derived from HOLDER_PRIVATE_KEY).",
+            "Holder Ed25519 public key. Overrides HOLDER_KEY env var when provided; otherwise derived from HOLDER_PRIVATE_KEY.",
         },
       },
       required: ["vc"],
@@ -355,7 +386,8 @@ const tools: Tool[] = [
     name: "zetrix_vp_submit",
     description:
       "Holder returns the signed VP blob to the server, which assembles the final VerifiablePresentation. " +
-      "If `ed25519SignData` is omitted, this tool signs `blob` with `holderPrivateKey` (or HOLDER_PRIVATE_KEY env var). " +
+      "If `ed25519SignData` is omitted, this tool signs `blob` with the resolved holder private key. " +
+      "Explicit `holderPrivateKey` / `ed25519PubKey` args override HOLDER_PRIVATE_KEY / HOLDER_KEY from the environment. " +
       "Maps to POST /v1/vp/submit.",
     inputSchema: {
       type: "object",
@@ -374,12 +406,12 @@ const tools: Tool[] = [
         ed25519PubKey: {
           type: "string",
           description:
-            "Holder Ed25519 public key. Defaults to HOLDER_KEY env var (or derived from HOLDER_PRIVATE_KEY).",
+            "Holder Ed25519 public key. Overrides HOLDER_KEY env var when provided; otherwise derived from HOLDER_PRIVATE_KEY.",
         },
         holderPrivateKey: {
           type: "string",
           description:
-            "Holder Ed25519 private key used to sign `blob` when `ed25519SignData` is not provided. Defaults to HOLDER_PRIVATE_KEY env var.",
+            "Holder Ed25519 private key used to sign `blob` when `ed25519SignData` is not provided. Overrides HOLDER_PRIVATE_KEY env var when provided.",
         },
       },
       required: ["blobId"],
@@ -392,7 +424,7 @@ const tools: Tool[] = [
     description:
       "Convenience flow for the holder: create a VP blob, sign it with the holder's Ed25519 private key, " +
       "submit it, and (optionally) cache it to get a share uuid. " +
-      "If `holderPrivateKey` / `ed25519PubKey` are omitted, HOLDER_PRIVATE_KEY / HOLDER_KEY from the environment are used. " +
+      "Explicit `holderPrivateKey` / `ed25519PubKey` args override HOLDER_PRIVATE_KEY / HOLDER_KEY from the environment. " +
       "Combines POST /v1/vp/create → sign → POST /v1/vp/submit → POST /v1/vp/cache (optional).",
     inputSchema: {
       type: "object",
@@ -416,12 +448,12 @@ const tools: Tool[] = [
         ed25519PubKey: {
           type: "string",
           description:
-            "Holder Ed25519 public key. Defaults to HOLDER_KEY env var (or derived from HOLDER_PRIVATE_KEY).",
+            "Holder Ed25519 public key. Overrides HOLDER_KEY env var when provided; otherwise derived from HOLDER_PRIVATE_KEY.",
         },
         holderPrivateKey: {
           type: "string",
           description:
-            "Holder Ed25519 private key used to sign the VP blob. Defaults to HOLDER_PRIVATE_KEY env var.",
+            "Holder Ed25519 private key used to sign the VP blob. Overrides HOLDER_PRIVATE_KEY env var when provided.",
         },
         cache: {
           type: "boolean",
@@ -554,14 +586,14 @@ function registerHandlers(server: Server) {
             throw new Error("`data` must be a non-empty array of TemplateMetadataDto.");
           }
           const data = applyDefaultTemplateId(rawData);
+          // Explicit args override env vars (HOLDER_PRIVATE_KEY / HOLDER_KEY).
           const holderPrivateKey = requireEnv(
             HOLDER_PRIVATE_KEY,
             "HOLDER_PRIVATE_KEY",
             args.holderPrivateKey as string | undefined
           );
           const holderPublicKey =
-            (args.holderPublicKey as string | undefined) ??
-            HOLDER_KEY ??
+            pick(args.holderPublicKey as string | undefined, HOLDER_KEY) ??
             (await signer.getPublicKey(holderPrivateKey));
 
           // Sign the canonicalised `data` payload; server re-canonicalises to verify.
@@ -609,11 +641,18 @@ function registerHandlers(server: Server) {
 
           let signVcId = args.signVcId as string | undefined;
           if (!signVcId) {
-            // When the signer isn't supplied, derive it from holder (or issuer) private key.
+            // Explicit args override env. Prefer the role-specific arg name
+            // (issuerPrivateKey when isIssuer=true, holderPrivateKey otherwise)
+            // but also accept the generic signerPrivateKey for either role.
+            const argSigner =
+              (args.signerPrivateKey as string | undefined) ??
+              (isIssuer
+                ? (args.issuerPrivateKey as string | undefined)
+                : (args.holderPrivateKey as string | undefined));
             const privateKey = requireEnv(
               isIssuer ? ISSUER_PRIVATE_KEY : HOLDER_PRIVATE_KEY,
               isIssuer ? "ISSUER_PRIVATE_KEY" : "HOLDER_PRIVATE_KEY",
-              args.holderPrivateKey as string | undefined
+              argSigner
             );
             const sig = await signer.sign(vcId, privateKey);
             signVcId = sig.signData;
@@ -627,13 +666,11 @@ function registerHandlers(server: Server) {
           const vc = args.vc as VerifiableCredential | undefined;
           if (!vc) throw new Error("`vc` is required.");
 
-          let ed25519PubKey = args.ed25519PubKey as string | undefined;
-          if (!ed25519PubKey) {
-            if (HOLDER_KEY) {
-              ed25519PubKey = HOLDER_KEY;
-            } else if (HOLDER_PRIVATE_KEY) {
-              ed25519PubKey = await signer.getPublicKey(HOLDER_PRIVATE_KEY);
-            }
+          // Explicit arg wins over HOLDER_KEY; falls back to deriving from
+          // HOLDER_PRIVATE_KEY if neither is set.
+          let ed25519PubKey = pick(args.ed25519PubKey as string | undefined, HOLDER_KEY);
+          if (!ed25519PubKey && pick(HOLDER_PRIVATE_KEY)) {
+            ed25519PubKey = await signer.getPublicKey(HOLDER_PRIVATE_KEY!);
           }
 
           const resp = await vcClient.createVp({
@@ -650,11 +687,12 @@ function registerHandlers(server: Server) {
           const blobId = args.blobId as string | undefined;
           if (!blobId) throw new Error("`blobId` is required.");
 
-          let signData = args.ed25519SignData as string | undefined;
-          let ed25519PubKey = args.ed25519PubKey as string | undefined;
+          let signData = pick(args.ed25519SignData as string | undefined);
+          // Explicit ed25519PubKey arg always overrides HOLDER_KEY env var.
+          let ed25519PubKey = pick(args.ed25519PubKey as string | undefined, HOLDER_KEY);
 
           if (!signData) {
-            const blob = args.blob as string | undefined;
+            const blob = pick(args.blob as string | undefined);
             if (!blob) {
               throw new Error(
                 "Either `ed25519SignData` (pre-computed) or `blob` (to sign locally) must be provided."
@@ -667,11 +705,9 @@ function registerHandlers(server: Server) {
             );
             const sig = await signer.sign(blob, holderPrivateKey);
             signData = sig.signData;
-            if (!ed25519PubKey) ed25519PubKey = HOLDER_KEY ?? sig.publicKey;
-          } else if (!ed25519PubKey) {
-            if (HOLDER_KEY) ed25519PubKey = HOLDER_KEY;
-            else if (HOLDER_PRIVATE_KEY)
-              ed25519PubKey = await signer.getPublicKey(HOLDER_PRIVATE_KEY);
+            if (!ed25519PubKey) ed25519PubKey = sig.publicKey;
+          } else if (!ed25519PubKey && pick(HOLDER_PRIVATE_KEY)) {
+            ed25519PubKey = await signer.getPublicKey(HOLDER_PRIVATE_KEY!);
           }
 
           if (!ed25519PubKey) {
@@ -691,14 +727,14 @@ function registerHandlers(server: Server) {
         case "zetrix_vp_present": {
           const vc = args.vc as VerifiableCredential | undefined;
           if (!vc) throw new Error("`vc` is required.");
+          // Explicit args override env vars (HOLDER_PRIVATE_KEY / HOLDER_KEY).
           const holderPrivateKey = requireEnv(
             HOLDER_PRIVATE_KEY,
             "HOLDER_PRIVATE_KEY",
             args.holderPrivateKey as string | undefined
           );
           const ed25519PubKey =
-            (args.ed25519PubKey as string | undefined) ??
-            HOLDER_KEY ??
+            pick(args.ed25519PubKey as string | undefined, HOLDER_KEY) ??
             (await signer.getPublicKey(holderPrivateKey));
 
           // 1. Create the VP blob

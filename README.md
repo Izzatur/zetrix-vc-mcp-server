@@ -74,8 +74,23 @@ Copy `.env.example` to `.env` (or set these in your MCP client's `env` block):
 | `ZETRIX_NODE_BASE_URL`  | no       | Override for the node RPC. Defaults by network: uat → `https://test-node.zetrix.com`, prod → `https://node.zetrix.com`. |
 
 \* Required whenever the Zetrix BaaS gateway enforces the keys.
-† Private keys may alternatively be passed as tool arguments (`issuerPrivateKey`,
-`holderPrivateKey`) to avoid storing them in the environment.
+† Private keys may alternatively be passed as tool arguments to avoid storing
+them in the environment.
+
+### Override semantics
+
+Every holder/issuer credential field has matching tool arguments — when passed,
+they **always override** the environment. Empty strings in env (e.g. placeholder
+values in config templates) are treated as "not set" so they don't block the
+explicit arg.
+
+| Env var                | Overriding tool arg                                |
+|------------------------|----------------------------------------------------|
+| `HOLDER_PRIVATE_KEY`   | `holderPrivateKey` (apply / download / vp_*)      |
+| `HOLDER_KEY`           | `holderPublicKey` (apply), `ed25519PubKey` (vp_*) |
+| `ISSUER_PRIVATE_KEY`   | `issuerPrivateKey` (issue / download with `isIssuer:true`) |
+| `TDS_CONTRACT_ADDRESS` | `tdsContractAddress` (get_template_detail)        |
+| `DEFAULT_TEMPLATE_ID`  | `templateId` on each `data[]` item, or top-level on get_template_detail |
 
 ## MCP Client Configuration
 
