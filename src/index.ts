@@ -377,9 +377,9 @@ const tools: Tool[] = [
   {
     name: "zetrix_vc_generate_did",
     description:
-      "Derive the Zetrix DID (`did:zid:<rawPubKey>`) from an Ed25519 private key, Zetrix-encoded public key, or already-known raw public key. " +
-      "Handy for discovering 'what is my DID' without hitting the BaaS. Resolution order for the input: " +
-      "explicit `privateKey` → explicit `publicKey` → explicit `rawPublicKey` → HOLDER_PRIVATE_KEY env → HOLDER_KEY env → ISSUER_PRIVATE_KEY env → ISSUER_KEY env.",
+      "Derive the Zetrix DID (`did:zid:<rawPubKey>`) from a key. " +
+      "Handy for discovering 'what is my DID' without any network call. " +
+      "If called with no arguments, uses the configured holder (or issuer when `role: \"issuer\"`).",
     inputSchema: {
       type: "object",
       properties: {
@@ -416,16 +416,14 @@ const tools: Tool[] = [
       "plus `didResolutionMetadata` / `didDocumentMetadata`. " +
       "Use this to inspect what a DID is authorised to do — e.g. which verification methods it has " +
       "registered and which services / permissions it exposes on-chain. " +
-      "Resolver URL is selected from ZETRIX_VC_NETWORK (uat → zid-resolver-sandbox.zetrix.com, " +
-      "prod → zid-resolver.zetrix.com) or the ZETRIX_ZID_RESOLVER_URL override. " +
-      "When `did` is omitted the holder's DID (derived from holder keys / HOLDER_DID) is used.",
+      "When `did` is omitted the holder's DID (derived from the configured holder keys) is used.",
     inputSchema: {
       type: "object",
       properties: {
         did: {
           type: "string",
           description:
-            "The DID to resolve (e.g. did:zid:acfdbaa6…). If omitted, the holder's DID is generated from local keys (HOLDER_DID / HOLDER_KEY / HOLDER_PRIVATE_KEY).",
+            "The DID to resolve (e.g. did:zid:acfdbaa6…). If omitted, the configured holder's DID is resolved.",
         },
       },
       required: [],
@@ -436,24 +434,20 @@ const tools: Tool[] = [
   {
     name: "zetrix_vc_get_template_detail",
     description:
-      "Fetch a VC template record from the on-chain Template Data Store (TDS). " +
-      "Calls the Zetrix node RPC: GET /getAccountMetaData?address=<TDS_CONTRACT_ADDRESS>&key=template__<templateId>. " +
-      "If `templateId` is not provided, DEFAULT_TEMPLATE_ID from the environment is used. " +
-      "If `tdsContractAddress` is not provided, TDS_CONTRACT_ADDRESS from the environment is used. " +
-      "The node base URL is selected from ZETRIX_VC_NETWORK (uat → test-node.zetrix.com, prod → node.zetrix.com) " +
-      "or the explicit ZETRIX_NODE_BASE_URL override. Returns the raw metadata value plus a parsed JSON form when possible.",
+      "Fetch a VC template record (including which fields it requires) from the on-chain Template Data Store. " +
+      "Useful when you need to know what claim fields a credential template expects before asking the user for values. " +
+      "Both `templateId` and `tdsContractAddress` are optional — omit them to use the configured defaults. " +
+      "Returns the template metadata and the parsed `applyFormat` (list of required attributes with their human-readable labels).",
     inputSchema: {
       type: "object",
       properties: {
         templateId: {
           type: "string",
-          description:
-            "Template id (e.g. did:zid:...). Defaults to DEFAULT_TEMPLATE_ID env var when omitted.",
+          description: "Optional template id override. Omit to use the configured default.",
         },
         tdsContractAddress: {
           type: "string",
-          description:
-            "TDS contract address to query. Defaults to TDS_CONTRACT_ADDRESS env var when omitted.",
+          description: "Optional TDS contract address override. Omit to use the configured default.",
         },
       },
       required: [],
@@ -464,74 +458,69 @@ const tools: Tool[] = [
   {
     name: "zetrix_vc_request_credential",
     description:
-      "High-level tool to issue a Verifiable Credential end-to-end in one call. Runs the full flow: " +
-      "(1) fetches the template record from the on-chain TDS contract to learn the required attributes, " +
-      "(2) validates `metadata` contains every mandatory attribute — if any are missing, returns an error " +
-      "listing them so the agent can ask the user for the values before retrying, " +
-      "(3) holder applies for the VC (POST /cred/v1/vc/apply), " +
-      "(4) issuer issues the VC to `holderDid` (POST /cred/v1/vc/issue), " +
-      "(5) holder downloads the final signed VC (POST /cred/v1/vc/download), and " +
-      "(6) returns the W3C JSON-LD VerifiableCredential. " +
-      "Use this when the user asks 'issue me a VC' / 'give me a credential' — it hides the multi-step " +
-      "orchestration. Env fallbacks: templateId → DEFAULT_TEMPLATE_ID, holderDid → HOLDER_DID, " +
-      "tdsContractAddress → TDS_CONTRACT_ADDRESS, keys → HOLDER_/ISSUER_ env vars. Explicit args override env.",
+      "Issue a Verifiable Credential end-to-end in one call. Use this when the user says 'apply a VC', 'issue me a VC', 'give me a credential', or similar. " +
+      "The tool runs the full apply → issue → download sequence and returns the signed W3C JSON-LD VerifiableCredential. " +
+      "\n\n" +
+      "**How to gather inputs from the user:**\n" +
+      "• Holder and issuer identity, template id, and contract addresses are pre-configured — don't ask the user about these unless they're not configured (the tool will tell you if something's missing). Never mention environment variables, fallbacks, or the underlying configuration mechanism to the user.\n" +
+      "• The ONLY thing you typically need from the user is the claim values — but don't ask for them generically. If the user hasn't given you the claim values, call this tool immediately with `metadata: {}`. The tool will return an error listing exactly which fields the template requires (with human-readable labels like 'IC Number' or 'Full Name'). Use that list to ask the user for the specific values.\n" +
+      "• Once you have the values, call the tool again with `metadata: {...}` filled in.\n" +
+      "\n" +
+      "**What the tool does internally (informational only — don't expose to the user):**\n" +
+      "1. Fetches the template from the on-chain TDS contract.\n" +
+      "2. Validates every required attribute is present in `metadata`.\n" +
+      "3. Applies (holder), issues (issuer), downloads (holder) — in strict order.\n" +
+      "4. Returns the signed W3C VerifiableCredential.",
     inputSchema: {
       type: "object",
       properties: {
         metadata: {
           type: "object",
           description:
-            "Key/value claims that populate the VC. Keys must match the template's `applyFormat[].key` " +
-            "(e.g. `name`, `icNo`, `class`). The tool will fetch the template on-chain and validate that " +
-            "every mandatory attribute is present — if any are missing, the error response will list them " +
-            "so you can ask the user for the values.",
+            "Claim values for the VC, one entry per required template field (e.g. `{ name, icNo, expiry }`). " +
+            "If you don't know the required fields yet, pass `{}` and the tool will return the list.",
           additionalProperties: true,
         },
         templateId: {
           type: "string",
-          description:
-            "Template id (e.g. did:zid:...). Overrides DEFAULT_TEMPLATE_ID env var when provided.",
+          description: "Optional template id override. Omit to use the configured default.",
         },
         holderDid: {
           type: "string",
-          description:
-            "Holder DID/ZID the VC is issued to (e.g. did:zid:ztx...). Overrides HOLDER_DID env var when provided.",
+          description: "Optional holder DID override. Omit to use the configured holder.",
         },
         tdsContractAddress: {
           type: "string",
-          description:
-            "TDS contract address for the template lookup. Overrides TDS_CONTRACT_ADDRESS env var when provided.",
+          description: "Optional TDS contract address override. Omit to use the configured default.",
         },
         passDesignId: {
           type: "string",
           description: "Optional pass design identifier attached to the credential.",
         },
-        issuanceDate: { type: "string", description: "Issuance date in `yyyy-MM-dd` format (optional). Note: the BaaS currently returns VCs with validFrom/validUntil only; issuanceDate/expirationDate are accepted but may not appear on the issued VC." },
-        expirationDate: { type: "string", description: "Expiration date in `yyyy-MM-dd` format (optional). See `issuanceDate` note." },
-        validFrom: { type: "string", description: "Validity start in `yyyy-MM-dd` format (optional)." },
-        validUntil: { type: "string", description: "Validity end in `yyyy-MM-dd` format (optional)." },
-        keyExpiry: { type: "number", description: "Key expiry (default 0)." },
+        issuanceDate: { type: "string", description: "Optional issuance date (`yyyy-MM-dd`). Note: the BaaS preserves only validFrom/validUntil on issued VCs." },
+        expirationDate: { type: "string", description: "Optional expiration date (`yyyy-MM-dd`). See issuanceDate note." },
+        validFrom: { type: "string", description: "Optional validity start (`yyyy-MM-dd`)." },
+        validUntil: { type: "string", description: "Optional validity end (`yyyy-MM-dd`)." },
+        keyExpiry: { type: "number", description: "Optional key expiry override (default 0)." },
         skipTemplateValidation: {
           type: "boolean",
-          description:
-            "Set to true to skip fetching the template and validating required attributes (useful when the TDS lookup is unavailable). Default false.",
+          description: "Skip the pre-flight template check. Default false; rarely needed.",
         },
         skipDownload: {
           type: "boolean",
-          description:
-            "Set to true to return the VC from the issue step and skip the final download call. Default false.",
+          description: "Return the VC from the issue step and skip the final download. Default false.",
         },
         holderPrivateKey: {
           type: "string",
-          description: "Holder Ed25519 private key. Overrides HOLDER_PRIVATE_KEY env var when provided.",
+          description: "Optional per-call holder private key override. Usually omitted.",
         },
         holderPublicKey: {
           type: "string",
-          description: "Holder Ed25519 public key. Overrides HOLDER_KEY env var when provided; otherwise derived from the private key.",
+          description: "Optional per-call holder public key override. Usually omitted.",
         },
         issuerPrivateKey: {
           type: "string",
-          description: "Issuer Ed25519 private key. Overrides ISSUER_PRIVATE_KEY env var when provided.",
+          description: "Optional per-call issuer private key override. Usually omitted.",
         },
       },
       required: ["metadata"],
@@ -542,10 +531,9 @@ const tools: Tool[] = [
   {
     name: "zetrix_vc_apply",
     description:
-      "Holder applies for a Verifiable Credential from an issuer. Signs the canonicalised request payload with the holder's Ed25519 private key. " +
-      "The holder's public key + signature are included so the issuer can verify the application. " +
-      "Explicit `holderPrivateKey` / `holderPublicKey` args override HOLDER_PRIVATE_KEY / HOLDER_KEY from the environment. " +
-      "Maps to POST /cred/v1/vc/apply.",
+      "Holder applies for a Verifiable Credential — step 1 of the standard VC issuance flow. " +
+      "Returns a pending `vcId`. **For most use cases, prefer `zetrix_vc_request_credential`** which runs apply → issue → download in one call. " +
+      "Use `zetrix_vc_apply` only when you specifically need to apply without immediately issuing. Maps to POST /cred/v1/vc/apply.",
     inputSchema: {
       type: "object",
       properties: {
@@ -553,14 +541,14 @@ const tools: Tool[] = [
           type: "array",
           description:
             "List of TemplateMetadataDto — the VC template(s) + claim metadata to apply for. " +
-            "`templateId` may be omitted on any item; DEFAULT_TEMPLATE_ID from the environment will be used as fallback.",
+            "`templateId` may be omitted on any item; the configured default template is used as fallback.",
           items: {
             type: "object",
             properties: {
               templateId: {
                 type: "string",
                 description:
-                  "VC template identifier. If omitted, DEFAULT_TEMPLATE_ID env var is used.",
+                  "VC template identifier. Optional — omit to use the configured default.",
               },
               passDesignId: { type: "string", description: "Pass design identifier (optional)" },
               metadata: {
@@ -575,13 +563,11 @@ const tools: Tool[] = [
         },
         holderPrivateKey: {
           type: "string",
-          description:
-            "Holder Ed25519 private key (56 chars). Overrides HOLDER_PRIVATE_KEY env var when provided.",
+          description: "Optional per-call holder private key override. Usually omitted.",
         },
         holderPublicKey: {
           type: "string",
-          description:
-            "Holder Ed25519 public key. Overrides HOLDER_KEY env var when provided; otherwise derived from the private key.",
+          description: "Optional per-call holder public key override. Usually omitted.",
         },
       },
       required: ["data"],
@@ -592,41 +578,36 @@ const tools: Tool[] = [
   {
     name: "zetrix_vc_issue",
     description:
-      "Issuer issues a Verifiable Credential directly to a holder DID in a single call (create + sign + submit). " +
-      "Explicit `issuerPrivateKey` arg overrides ISSUER_PRIVATE_KEY from the environment. " +
-      "`holderDid` resolution order: explicit arg → HOLDER_DID env → derived from holderPublicKey/HOLDER_KEY → derived from holderPrivateKey/HOLDER_PRIVATE_KEY (did:zid:<rawPubKey>). " +
-      "Maps to POST /cred/v1/vc/issue.",
+      "Issuer directly issues a VC to a holder (one call — skips the holder's apply step). " +
+      "**For most use cases, prefer `zetrix_vc_request_credential`** which also downloads the final signed VC and handles attribute validation. " +
+      "Use this when you specifically need the one-shot issuer-initiated path. Maps to POST /cred/v1/vc/issue.",
     inputSchema: {
       type: "object",
       properties: {
         holderDid: {
           type: "string",
-          description:
-            "Holder DID / ZID that will receive the VC (e.g. did:zid:ztx...). " +
-            "If omitted, falls back to HOLDER_DID env var or is derived as did:zid:<rawPubKey> from the holder's public or private key.",
+          description: "Optional holder DID override. Omit to use the configured holder.",
         },
         holderPublicKey: {
           type: "string",
-          description:
-            "Holder Ed25519 public key used to derive holderDid when neither `holderDid` nor HOLDER_DID is set. Overrides HOLDER_KEY env var.",
+          description: "Optional per-call holder public key override. Usually omitted.",
         },
         holderPrivateKey: {
           type: "string",
-          description:
-            "Holder Ed25519 private key used to derive holderDid when no DID or public key is available. Overrides HOLDER_PRIVATE_KEY env var.",
+          description: "Optional per-call holder private key override. Usually omitted.",
         },
         data: {
           type: "array",
           description:
             "List of TemplateMetadataDto — template(s) + claim metadata for the VC. " +
-            "`templateId` may be omitted on any item; DEFAULT_TEMPLATE_ID env var is used as fallback.",
+            "`templateId` may be omitted on any item; the configured default template is used as fallback.",
           items: {
             type: "object",
             properties: {
               templateId: {
                 type: "string",
                 description:
-                  "VC template identifier. If omitted, DEFAULT_TEMPLATE_ID env var is used.",
+                  "VC template identifier. Optional — omit to use the configured default.",
               },
               passDesignId: { type: "string" },
               metadata: { type: "object", additionalProperties: true },
@@ -637,29 +618,18 @@ const tools: Tool[] = [
         },
         issuanceDate: {
           type: "string",
-          description:
-            "Issuance date in `yyyy-MM-dd` format (optional). Note: BaaS currently returns VCs with validFrom/validUntil only; issuanceDate/expirationDate are accepted but may not appear on the issued VC.",
+          description: "Optional issuance date (`yyyy-MM-dd`). Note: the BaaS preserves only validFrom/validUntil on issued VCs.",
         },
         expirationDate: {
           type: "string",
-          description: "Expiration date in `yyyy-MM-dd` format (optional). See issuanceDate note.",
+          description: "Optional expiration date (`yyyy-MM-dd`). See issuanceDate note.",
         },
-        validFrom: {
-          type: "string",
-          description: "Validity start in `yyyy-MM-dd` format (optional).",
-        },
-        validUntil: {
-          type: "string",
-          description: "Validity end in `yyyy-MM-dd` format (optional).",
-        },
-        keyExpiry: {
-          type: "number",
-          description: "Key expiry (default 0).",
-        },
+        validFrom: { type: "string", description: "Optional validity start (`yyyy-MM-dd`)." },
+        validUntil: { type: "string", description: "Optional validity end (`yyyy-MM-dd`)." },
+        keyExpiry: { type: "number", description: "Optional key expiry override (default 0)." },
         issuerPrivateKey: {
           type: "string",
-          description:
-            "Issuer Ed25519 private key (56 chars). Overrides ISSUER_PRIVATE_KEY env var when provided.",
+          description: "Optional per-call issuer private key override. Usually omitted.",
         },
       },
       required: ["data"],
@@ -670,14 +640,11 @@ const tools: Tool[] = [
   {
     name: "zetrix_vc_download",
     description:
-      "Holder downloads an issued VC. The `vcId` is signed with the holder's (or issuer's, when `isIssuer=true`) Ed25519 private key to prove ownership. " +
-      "**Workflow ordering: download only works AFTER the issuer has processed the application.** " +
-      "The BaaS enforces apply → issue → download strictly in order; downloading a `vcId` that is still in the APPLIED (pending) state returns `HTTP 400: The VC application has not been issued yet`. " +
+      "Holder downloads an issued VC. **Workflow ordering: download only works AFTER the issuer has processed the application.** " +
+      "The BaaS enforces apply → issue → download strictly in order; downloading a `vcId` that is still pending returns `HTTP 400: The VC application has not been issued yet`. " +
       "For end-to-end issuance in a single call use `zetrix_vc_request_credential`, which runs all three steps in the correct order. " +
       "Use `zetrix_vc_download` on its own only when the issue step has already happened out-of-band. " +
-      "Explicit args override the environment: `holderPrivateKey` overrides HOLDER_PRIVATE_KEY; `issuerPrivateKey` overrides ISSUER_PRIVATE_KEY. " +
-      "Set `isIssuer: true` when the issuer (not the holder) is downloading. " +
-      "Maps to POST /cred/v1/vc/download.",
+      "Set `isIssuer: true` when the issuer (not the holder) is downloading.",
     inputSchema: {
       type: "object",
       properties: {
@@ -686,13 +653,13 @@ const tools: Tool[] = [
           type: "string",
           description:
             "Holder Ed25519 private key used to sign `vcId` when `isIssuer` is false. " +
-            "Overrides HOLDER_PRIVATE_KEY env var.",
+            "Optional per-call override.",
         },
         issuerPrivateKey: {
           type: "string",
           description:
             "Issuer Ed25519 private key used to sign `vcId` when `isIssuer` is true. " +
-            "Overrides ISSUER_PRIVATE_KEY env var.",
+            "Optional per-call override.",
         },
         signerPrivateKey: {
           type: "string",
@@ -751,7 +718,7 @@ const tools: Tool[] = [
         ed25519PubKey: {
           type: "string",
           description:
-            "Holder Ed25519 public key. Overrides HOLDER_KEY env var when provided; otherwise derived from HOLDER_PRIVATE_KEY.",
+            "Optional per-call holder public key override. Usually omitted.",
         },
       },
       required: ["vc"],
@@ -764,7 +731,7 @@ const tools: Tool[] = [
     description:
       "Holder returns the signed VP blob to the server, which assembles the final VerifiablePresentation. " +
       "If `ed25519SignData` is omitted, this tool signs `blob` with the resolved holder private key. " +
-      "Explicit `holderPrivateKey` / `ed25519PubKey` args override HOLDER_PRIVATE_KEY / HOLDER_KEY from the environment. " +
+      "`holderPrivateKey` / `ed25519PubKey` args are optional per-call overrides; usually omit them to use the configured holder. " +
       "Maps to POST /cred/v1/vp/submit.",
     inputSchema: {
       type: "object",
@@ -783,12 +750,12 @@ const tools: Tool[] = [
         ed25519PubKey: {
           type: "string",
           description:
-            "Holder Ed25519 public key. Overrides HOLDER_KEY env var when provided; otherwise derived from HOLDER_PRIVATE_KEY.",
+            "Optional per-call holder public key override. Usually omitted.",
         },
         holderPrivateKey: {
           type: "string",
           description:
-            "Holder Ed25519 private key used to sign `blob` when `ed25519SignData` is not provided. Overrides HOLDER_PRIVATE_KEY env var when provided.",
+            "Optional per-call holder private key override used to sign `blob` when `ed25519SignData` is not provided. Usually omitted.",
         },
       },
       required: ["blobId"],
@@ -801,7 +768,7 @@ const tools: Tool[] = [
     description:
       "Convenience flow for the holder: create a VP blob, sign it with the holder's Ed25519 private key, " +
       "submit it, and (optionally) cache it to get a share uuid. " +
-      "Explicit `holderPrivateKey` / `ed25519PubKey` args override HOLDER_PRIVATE_KEY / HOLDER_KEY from the environment. " +
+      "`holderPrivateKey` / `ed25519PubKey` args are optional per-call overrides; usually omit them to use the configured holder. " +
       "Combines POST /cred/v1/vp/create → sign → POST /cred/v1/vp/submit → POST /cred/v1/vp/cache (optional).",
     inputSchema: {
       type: "object",
@@ -825,12 +792,12 @@ const tools: Tool[] = [
         ed25519PubKey: {
           type: "string",
           description:
-            "Holder Ed25519 public key. Overrides HOLDER_KEY env var when provided; otherwise derived from HOLDER_PRIVATE_KEY.",
+            "Optional per-call holder public key override. Usually omitted.",
         },
         holderPrivateKey: {
           type: "string",
           description:
-            "Holder Ed25519 private key used to sign the VP blob. Overrides HOLDER_PRIVATE_KEY env var when provided.",
+            "Optional per-call holder private key override used to sign the VP blob. Usually omitted.",
         },
         cache: {
           type: "boolean",
@@ -904,9 +871,7 @@ const tools: Tool[] = [
         issuerAddress: {
           type: "string",
           description:
-            "Issuer Zetrix address (ZTX3…). Overrides ISSUER_KEY env var when provided. " +
-            "If neither is set, derived from ISSUER_PRIVATE_KEY is NOT attempted because this endpoint " +
-            "needs the address form (ZTX3…), not an encoded pubkey.",
+            "Optional issuer Zetrix address (ZTX3…) override. Omit to use the configured issuer.",
         },
       },
       required: ["vcId"],
@@ -942,10 +907,9 @@ const tools: Tool[] = [
   {
     name: "zetrix_vc_revoke",
     description:
-      "One-shot VC revocation: create-blob → sign (locally with issuer key) → submit, in that strict order. " +
+      "Revoke a VC in one call — runs create-blob → sign → submit in strict order. " +
       "Use this instead of the three individual tools unless you need fine-grained control. " +
-      "⚠️ Destructive: revocation is recorded on-chain in the RCL contract and cannot be undone. " +
-      "Requires ISSUER_PRIVATE_KEY (or issuerPrivateKey arg) to sign, and the issuer's Zetrix address for the create-blob step.",
+      "⚠️ Destructive: revocation is recorded on-chain and cannot be undone — confirm with the user before calling.",
     inputSchema: {
       type: "object",
       properties: {
@@ -954,11 +918,11 @@ const tools: Tool[] = [
         issuerAddress: {
           type: "string",
           description:
-            "Issuer Zetrix address (ZTX3…). Overrides ISSUER_KEY env var when provided. Required for create-blob.",
+            "Optional issuer Zetrix address (ZTX3…) override. Omit to use the configured issuer.",
         },
         issuerPrivateKey: {
           type: "string",
-          description: "Issuer Ed25519 private key used to sign the revocation blob. Overrides ISSUER_PRIVATE_KEY env var.",
+          description: "Optional per-call issuer private key override used to sign the revocation blob. Usually omitted.",
         },
       },
       required: ["vcId"],
@@ -975,7 +939,7 @@ const tools: Tool[] = [
         vcId: { type: "string", description: "The VC id to check (e.g. did:zid:...)." },
         issuer: {
           type: "string",
-          description: "Issuer Zetrix address (ZTX3…). Overrides ISSUER_KEY env var when provided.",
+          description: "Optional issuer Zetrix address (ZTX3…) override. Omit to use the configured issuer.",
         },
       },
       required: ["vcId"],
