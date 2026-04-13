@@ -1,0 +1,19 @@
+{
+  "mcpServers": {
+    "zetrix-vc-uat": {
+      "command": "node",
+      "args": [
+        "/absolute/path/to/zetrix-vc-mcp-server/dist/index.js"
+      ],
+      "env": {
+        "ZETRIX_VC_NETWORK": "uat",
+        "AWS_GATEWAY_API_KEY": "your-aws-api-gateway-key",
+        "BAAS_API_KEY": "your-zetrix-baas-api-key",
+        "ISSUER_KEY": "issuer-ed25519-public-key",
+        "ISSUER_PRIVATE_KEY": "issuer-ed25519-private-key-56-chars",
+        "HOLDER_KEY": "holder-ed25519-public-key",
+        "HOLDER_PRIVATE_KEY": "holder-ed25519-private-key-56-chars"
+      }
+    }
+  }
+}

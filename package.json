@@ -1,0 +1,59 @@
+{
+  "name": "zetrix-vc-mcp-server",
+  "version": "1.0.0",
+  "description": "MCP server for Zetrix Verifiable Credentials (VC) and Verifiable Presentations (VP) — apply, issue, download VC and create, cache, verify VP via the Zetrix BaaS API.",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "zetrix-vc-mcp-server": "dist/index.js"
+  },
+  "files": [
+    "dist/**/*",
+    "configs/**/*",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/index.ts",
+    "start": "node dist/index.js",
+    "start:http": "ZETRIX_VC_TRANSPORT=http node dist/index.js",
+    "watch": "tsc --watch",
+    "prepare": "npm run build",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "mcp",
+    "mcp-server",
+    "model-context-protocol",
+    "zetrix",
+    "baas",
+    "verifiable-credentials",
+    "verifiable-presentations",
+    "vc",
+    "vp",
+    "ssi",
+    "did",
+    "w3c",
+    "claude",
+    "ai"
+  ],
+  "author": {
+    "name": "Zetrix",
+    "email": "dev@zetrix.com"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.23.0",
+    "axios": "^1.13.2",
+    "zetrix-encryption-nodejs": "^1.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3"
+  }
+}
