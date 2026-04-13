@@ -254,20 +254,39 @@ async function generateDid(params: {
   privateKeyArg?: string;
   privateKeyEnv?: string;
 }): Promise<string> {
-  // Normalise any explicit DID — if someone put a ZTX3 address in
-  // HOLDER_DID by mistake, this throws loudly with guidance instead of
-  // silently sending the wrong format to the BaaS.
-  const explicit = pick(params.didArg, params.didEnv);
-  if (explicit) return normaliseZetrixDid(explicit, params.role);
+  // 1. Explicit DID arg or env — normalise all accepted forms.
+  const explicitDid = pick(params.didArg, params.didEnv);
+  if (explicitDid) return normaliseZetrixDid(explicitDid, params.role);
 
-  // Only encoded pubkeys (b001…) are usable for DID derivation. HOLDER_KEY /
-  // ISSUER_KEY env values that are addresses (ZTX3…) are skipped so we fall
-  // through to deriving from the private key.
-  const pub =
-    asEncodedEd25519PubKey(params.publicKeyArg) ??
-    asEncodedEd25519PubKey(params.publicKeyEnv);
-  if (pub) return deriveDidFromEncodedPublicKey(pub);
+  // 2. Explicit publicKey ARG — this MUST succeed. If the caller passed
+  //    `holderPublicKey`, they meant a specific holder; we must never
+  //    silently fall back to an env value that would resolve to a
+  //    different holder. Throws a clear error on malformed input.
+  const pubArg = pick(params.publicKeyArg);
+  if (pubArg) {
+    try {
+      return normaliseZetrixDid(pubArg, params.role);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      throw new Error(
+        `${params.role}PublicKey provided but cannot derive a DID from it. ${msg}`
+      );
+    }
+  }
 
+  // 3. Env publicKey — silently skipped if malformed (e.g. a ZTX3 address,
+  //    which happens in practice: see HOLDER_KEY env in the reference
+  //    config). We fall through to private-key derivation.
+  const pubEnv = pick(params.publicKeyEnv);
+  if (pubEnv) {
+    try {
+      return normaliseZetrixDid(pubEnv, params.role);
+    } catch {
+      /* fall through — env pubkey is in the wrong form, try private key */
+    }
+  }
+
+  // 4. Private key → encoded pubkey → DID.
   const priv = pick(params.privateKeyArg, params.privateKeyEnv);
   if (priv) {
     const encoded = await signer.getPublicKey(priv);
@@ -276,9 +295,9 @@ async function generateDid(params: {
 
   const ROLE = params.role === "holder" ? "HOLDER" : "ISSUER";
   throw new Error(
-    `Missing ${params.role}Did. Provide ${params.role}Did (or ${ROLE}_DID env), ` +
-      `or supply ${params.role}PublicKey (76-char b001… form) / ${params.role}PrivateKey ` +
-      `(or ${ROLE}_PRIVATE_KEY env) so the DID can be derived as did:zid:<rawPubKey>.`
+    `Missing ${params.role}Did. Provide ${params.role}Did (or ${ROLE}_DID env) in did:zid:<rawPubKey> form, ` +
+      `or supply ${params.role}PublicKey (b001… encoded, raw 64-hex, or did:zid:…) / ${params.role}PrivateKey ` +
+      `(or ${ROLE}_PRIVATE_KEY env).`
   );
 }
 
