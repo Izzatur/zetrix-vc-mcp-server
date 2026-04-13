@@ -217,18 +217,12 @@ function normaliseZetrixDid(value: string, role: "holder" | "issuer"): string {
   const enc = asEncodedEd25519PubKey(v);
   if (enc) return deriveDidFromEncodedPublicKey(enc);
   if (/^ZTX[A-Za-z0-9]+$/.test(v)) {
-    const R = role; // 'holder' | 'issuer'
     throw new Error(
-      `NEXT_STEP_REQUIRED: "${v}" is a Zetrix address, not a DID — the BaaS needs the ${R} DID (did:zid:<rawPubKey> form), and Zetrix addresses can't be reversed into a public key locally.\n\n` +
-        `Ask the user to provide ONE of the following, then retry with that field set on the tool call:\n` +
-        `  • ${R} DID            → pass as \`${R}Did\`           e.g. "did:zid:<64 hex chars>"\n` +
-        `  • ${R} public key     → pass as \`${R}PublicKey\`     (any of: 64-hex raw, or 76-hex "b001…" encoded, or a did:zid:… string)\n` +
-        `  • ${R} private key    → pass as \`${R}PrivateKey\`    (the tool will derive the DID and sign with it)\n\n` +
-        `Do NOT retry with the ZTX3 address — it cannot be used.`
+      `NEXT_STEP_REQUIRED: ZTX3 address can't be used. Ask the user briefly for the ${role}'s DID, public key, or private key — then retry with ${role}Did / ${role}PublicKey / ${role}PrivateKey set. Do not explain tools or formats.`
     );
   }
   throw new Error(
-    `NEXT_STEP_REQUIRED: cannot interpret ${role}Did value "${v}". Ask the user for the ${role}'s DID in did:zid:<rawPubKey> form, or their public key (64-hex raw / 76-hex b001… encoded), or their private key.`
+    `NEXT_STEP_REQUIRED: cannot read ${role} identifier "${v}". Ask the user briefly for their DID, public key, or private key. Do not explain tools or formats.`
   );
 }
 
@@ -509,9 +503,9 @@ const tools: Tool[] = [
   {
     name: "zetrix_vc_generate_did",
     description:
-      "Derive the Zetrix DID (`did:zid:<rawPubKey>`) from a key. " +
-      "Handy for discovering 'what is my DID' without any network call. " +
-      "If called with no arguments, uses the configured holder (or issuer when `role: \"issuer\"`).",
+      "Produce a Zetrix DID from a private/public key. Use when the user asks 'what is my DID?' or supplies raw key material they want the DID for. No network call. Defaults to the configured holder.\n" +
+      "\n" +
+      "⚠ Style: when replying, never name tools/parameters/JSON/APIs/internal steps. Plain language only.",
     inputSchema: {
       type: "object",
       properties: {
@@ -542,13 +536,9 @@ const tools: Tool[] = [
   {
     name: "zetrix_vc_resolve_did",
     description:
-      "Resolve a Zetrix DID (did:zid:...) to its DID document using the Zetrix ZID resolver. " +
-      "Calls GET <resolver>/1.0/identifiers/<did>. The response follows the W3C DID Resolution spec " +
-      "— it contains `didDocument` (with verificationMethod, service endpoints, and permissions) " +
-      "plus `didResolutionMetadata` / `didDocumentMetadata`. " +
-      "Use this to inspect what a DID is authorised to do — e.g. which verification methods it has " +
-      "registered and which services / permissions it exposes on-chain. " +
-      "When `did` is omitted the holder's DID (derived from the configured holder keys) is used.",
+      "Resolve a DID to its DID document. Use when the user asks 'look up DID …', 'what does DID … have?', 'show me the DID doc for …', or 'what permissions does DID … have?'. Defaults to the configured holder's DID when none is given.\n" +
+      "\n" +
+      "⚠ Style: when replying, never name tools/parameters/JSON/APIs/internal steps. Plain language only.",
     inputSchema: {
       type: "object",
       properties: {
@@ -566,10 +556,9 @@ const tools: Tool[] = [
   {
     name: "zetrix_vc_get_template_detail",
     description:
-      "Fetch a VC template record (including which fields it requires) from the on-chain Template Data Store. " +
-      "Useful when you need to know what claim fields a credential template expects before asking the user for values. " +
-      "Both `templateId` and `tdsContractAddress` are optional — omit them to use the configured defaults. " +
-      "Returns the template metadata and the parsed `applyFormat` (list of required attributes with their human-readable labels).",
+      "Look up a credential template (including what fields it requires). Use when the user asks 'what fields does the … template need?' or you need to check template rules before acting. Defaults to the configured template.\n" +
+      "\n" +
+      "⚠ Style: when replying, never name tools/parameters/JSON/APIs/internal steps. Plain language only.",
     inputSchema: {
       type: "object",
       properties: {
@@ -590,17 +579,13 @@ const tools: Tool[] = [
   {
     name: "zetrix_vc_request_credential",
     description:
-      "End-to-end VC issuance: apply → issue → download, in one call, returning the signed W3C VerifiableCredential.\n" +
+      "Issue a VC end-to-end for the configured holder. Returns the signed credential.\n" +
       "\n" +
-      "★ USE THIS when the user asks to get a credential issued to themselves (the configured holder):\n" +
-      "  • 'apply VC for me'\n" +
-      "  • 'issue me a VC' / 'issue VC for me'\n" +
-      "  • 'create VC for me'\n" +
-      "  • 'give me a credential' / 'get me a VC' / 'I want my MyKAD'\n" +
+      "Pick this when the user wants a credential for themselves: 'apply VC for me', 'issue me a VC', 'create VC for me', 'give me a credential'. If the user names a different recipient, pick the issue-to-recipient tool instead.\n" +
       "\n" +
-      "★ DO NOT USE when the user specifies a target different from the configured holder (e.g. 'issue VC to address A' → use `zetrix_vc_issue`), or when they explicitly want only one step (e.g. 'apply only' → use `zetrix_vc_apply`; 'download only' → use `zetrix_vc_download`).\n" +
+      "Call it with no arguments first — if anything is needed from the user it will return a NEXT_STEP_REQUIRED message telling you exactly what to ask for. Then retry with that data filled in.\n" +
       "\n" +
-      "★ HOW TO CALL: first turn, call with NO arguments (`{}`). The tool returns either the final VC or a `NEXT_STEP_REQUIRED` message listing exactly which claim fields to ask the user for. On the next turn, call again with `metadata` populated using the `key` names the tool listed. Never ask the user about templateId, keys, addresses, or configuration — those are preset.",
+      "⚠ Style: when replying to the user, NEVER mention tool names, parameter names, JSON, APIs, templates, or internal steps. Speak in plain, conversational language. If you need data from the user, ask in one short message naming only the values they should provide.",
     inputSchema: {
       type: "object",
       properties: {
@@ -678,14 +663,11 @@ const tools: Tool[] = [
   {
     name: "zetrix_vc_apply",
     description:
-      "Apply for a VC **only** — creates a pending application without issuing. Returns a pending `vcId` in `APPLIED` status; the VC cannot be downloaded until the issuer separately processes the application.\n" +
+      "Apply for a VC only — creates a pending application; does not issue.\n" +
       "\n" +
-      "★ USE THIS when the user explicitly wants the apply step only, without issuance:\n" +
-      "  • 'apply VC only, no need to issue'\n" +
-      "  • 'just apply, don't issue yet'\n" +
-      "  • 'create a VC application'\n" +
+      "Pick this only when the user explicitly says 'apply only / no issue / just apply'. If they just say 'apply VC for me' (no qualifier), pick the full-flow issuance tool instead.\n" +
       "\n" +
-      "★ DO NOT USE when the user says 'apply VC for me' without the 'only' / 'no issue' qualifier — they mean the full flow; use `zetrix_vc_request_credential` instead.",
+      "⚠ Style: when replying to the user, never name tools, parameters, JSON, APIs, or internal steps. Plain language only.",
     inputSchema: {
       type: "object",
       properties: {
@@ -727,20 +709,13 @@ const tools: Tool[] = [
   {
     name: "zetrix_vc_issue",
     description:
-      "Issuer directly issues a VC to a specific holder identified by DID or key. Returns the signed VC (includes `vc.id`). Does NOT download; if the holder wants the canonical VC later, they call `zetrix_vc_download` with the returned vcId.\n" +
+      "Issue a VC to a specific recipient identified by DID, public key, or private key.\n" +
       "\n" +
-      "★ USE THIS when the user specifies a target recipient different from the configured holder:\n" +
-      "  • 'issue VC to did:zid:…'\n" +
-      "  • 'issue VC for this holder — here is their public key'\n" +
-      "  • 'issue VC but don't download'\n" +
+      "Pick this when the user names a recipient that is NOT themselves: 'issue VC to did:zid:…', 'create VC for this holder — here is their key', etc. If the user just says 'issue me a VC' (no recipient named), pick the full-flow issuance tool instead.\n" +
       "\n" +
-      "★ Identifying the holder — Zetrix addresses (e.g. `ZTX3LAYaP9UwNpCXFz4SrsN1B8LiJ8y4CiRcg`) CANNOT be used. If the user gives you only a ZTX3 address, you must ask them to provide ONE of:\n" +
-      "  • `holderDid` (did:zid:<64-hex>) — preferred\n" +
-      "  • `holderPublicKey` — a 64-hex raw pubkey or 76-hex `b001…` encoded pubkey\n" +
-      "  • `holderPrivateKey` — the tool will derive the DID from it\n" +
-      "Don't attempt to pass the ZTX3 address as holderDid — the BaaS needs the DID form and Zetrix addresses can't be reversed into a public key locally.\n" +
+      "If the user only gives a Zetrix address (ZTX3…), the call will fail with NEXT_STEP_REQUIRED telling you to ask the user for their DID, public key, or private key. Don't try to pass a ZTX3 address as the recipient — it can't be used.\n" +
       "\n" +
-      "★ DO NOT USE when the user just says 'issue me a VC' / 'issue VC for me' without specifying a recipient — that means 'issue to me and complete the flow'; use `zetrix_vc_request_credential` instead.",
+      "⚠ Style: when replying to the user, never name tools, parameters, JSON, APIs, or internal steps. Ask only for the values they need to provide, in one short sentence.",
     inputSchema: {
       type: "object",
       properties: {
@@ -801,16 +776,11 @@ const tools: Tool[] = [
   {
     name: "zetrix_vc_download",
     description:
-      "Download a VC that has already been issued, given its `vcId`. Returns the canonical signed W3C VC.\n" +
+      "Download a VC that's already been issued, given its id.\n" +
       "\n" +
-      "★ USE THIS when the user wants to retrieve an already-issued VC:\n" +
-      "  • 'download the VC for me' / 'download VC <vcId>'\n" +
-      "  • 'fetch my VC'\n" +
-      "  • 'get the VC for vcId …'\n" +
+      "Pick this when the user wants to retrieve an existing credential ('download my VC', 'fetch the VC', 'get VC <id>'). If the user wants a brand-new credential, pick the full-flow issuance tool instead.\n" +
       "\n" +
-      "★ Prerequisite: the VC must already be issued (not in the APPLIED/pending state). If the user asks for a brand-new credential, use `zetrix_vc_request_credential` instead — it runs apply → issue → download in one call.\n" +
-      "\n" +
-      "Set `isIssuer: true` when the issuer (not the holder) is downloading.",
+      "⚠ Style: when replying to the user, never name tools, parameters, JSON, APIs, or internal steps. Plain language only.",
     inputSchema: {
       type: "object",
       properties: {
@@ -864,8 +834,7 @@ const tools: Tool[] = [
   {
     name: "zetrix_vp_create",
     description:
-      "⚙ LOW-LEVEL BUILDING BLOCK — returns only the unsigned VP blob. Use `zetrix_vp_present` for the full create → sign → submit flow that a user actually wants when they say 'create VP'. " +
-      "Use `zetrix_vp_create` only when you're doing custom signing out-of-band and want just the blob.",
+      "⛔ INTERNAL/ADVANCED — never pick for natural-language requests. Returns the unsigned VP blob only; the user-facing 'create VP' / 'present VP' intent goes to the full presentation tool instead.",
     inputSchema: {
       type: "object",
       properties: {
@@ -908,8 +877,7 @@ const tools: Tool[] = [
   {
     name: "zetrix_vp_submit",
     description:
-      "⚙ LOW-LEVEL BUILDING BLOCK — submits an already-signed VP blob. Use `zetrix_vp_present` for the full create → sign → submit flow that a user wants when they say 'create VP'. " +
-      "Use `zetrix_vp_submit` only when the VP blob was signed out-of-band.",
+      "⛔ INTERNAL/ADVANCED — never pick for natural-language requests. Submits an already-signed VP blob; the user-facing 'create VP' / 'present VP' intent goes to the full presentation tool instead.",
     inputSchema: {
       type: "object",
       properties: {
@@ -943,17 +911,13 @@ const tools: Tool[] = [
   {
     name: "zetrix_vp_present",
     description:
-      "End-to-end VP creation: create blob → sign locally → submit → (optional) cache and return a share uuid. Returns the signed W3C VerifiablePresentation.\n" +
+      "Create a Verifiable Presentation from a VC end-to-end (returns the signed VP, optionally with a share token).\n" +
       "\n" +
-      "★ USE THIS when the user asks to create / present / make a VP:\n" +
-      "  • 'create VP' / 'make a VP' / 'present my VC'\n" +
-      "  • 'generate a VP revealing just my name'\n" +
-      "  • 'share my VC with a verifier'\n" +
+      "Pick this when the user says 'create VP', 'make a VP', 'present my VC', 'share my VC with a verifier'. You need a VC and which fields to reveal. Reveal paths use dotted form like `id`, `mykad.name`, `mykad.icNo`; empty array reveals everything.\n" +
       "\n" +
-      "★ You need: a `vc` (typically the one just issued via `zetrix_vc_request_credential`) and a `revealAttribute` list. " +
-      "revealAttribute uses dotted paths like `id`, `mykad.name`, `mykad.icNo` (format: `<camelCaseTemplateName>.<field>`). Pass `[]` to reveal everything.\n" +
+      "Set cache to true when the user wants a share token to send to someone.\n" +
       "\n" +
-      "★ Set `cache: true` to also get a short share uuid the user can send to a verifier.",
+      "⚠ Style: when replying to the user, never name tools, parameters, JSON, APIs, or internal steps. Plain language only.",
     inputSchema: {
       type: "object",
       properties: {
@@ -1016,18 +980,11 @@ const tools: Tool[] = [
   {
     name: "zetrix_vp_verify",
     description:
-      "Verify a Verifiable Presentation. Returns whether the VP is valid (`isVerified`) plus the disclosed claims per VC (`vcDetail`).\n" +
+      "Verify a Verifiable Presentation. Returns whether it's valid and the disclosed claims.\n" +
       "\n" +
-      "★ USE THIS when the user wants to verify a VP:\n" +
-      "  • 'verify VP' / 'verify this VP'\n" +
-      "  • 'verify VP uuid <id>' / 'verify VP by id' — pass `uuid`\n" +
-      "  • 'verify this presentation' — pass `vp`\n" +
+      "Pick this when the user says 'verify VP', 'verify this presentation', or gives a share token to check. Accepts either the VP itself or a share token — pass whichever the user provides.\n" +
       "\n" +
-      "★ Accepts EITHER:\n" +
-      "  • `vp`: the signed VP object directly (JSON-LD), OR\n" +
-      "  • `uuid`: a share-token returned by `zetrix_vp_cache` / `zetrix_vp_present(cache: true)` — the server looks up the cached VP and verifies it.\n" +
-      "\n" +
-      "Exactly one of `vp` / `uuid` is required.",
+      "⚠ Style: when replying to the user, never name tools, parameters, JSON, APIs, or internal steps. Plain language only.",
     inputSchema: {
       type: "object",
       properties: {
@@ -1059,10 +1016,7 @@ const tools: Tool[] = [
   {
     name: "zetrix_vc_revoke_create_blob",
     description:
-      "Step 1 of 3 in the revocation flow. Issuer requests a revocation blob for a specific vcId. " +
-      "Returns `{ blobId, blob }` where `blob` is a hex-encoded protobuf transaction the issuer must sign " +
-      "(use `zetrix_vc_revoke` for the one-shot combo). " +
-      "Maps to POST /cred/v1/vc/revoke/create-blob.",
+      "⛔ INTERNAL/ADVANCED — never pick for natural-language revocation requests. Step 1 of 3 in a manual revocation flow. For the normal case, pick the one-shot revocation tool instead.",
     inputSchema: {
       type: "object",
       properties: {
@@ -1080,12 +1034,11 @@ const tools: Tool[] = [
   {
     name: "zetrix_vc_revoke_submit",
     description:
-      "Step 3 of 3 in the revocation flow. Issuer submits the signed revocation blob. " +
-      "Maps to POST /cred/v1/vc/revoke/submit.",
+      "⛔ INTERNAL/ADVANCED — never pick for natural-language revocation requests. Step 3 of 3 in a manual revocation flow. For the normal case, pick the one-shot revocation tool instead.",
     inputSchema: {
       type: "object",
       properties: {
-        blobId: { type: "string", description: "blobId returned from zetrix_vc_revoke_create_blob." },
+        blobId: { type: "string", description: "blobId returned from the prior create-blob step." },
         signerList: {
           type: "array",
           description:
@@ -1107,9 +1060,8 @@ const tools: Tool[] = [
   {
     name: "zetrix_vc_revoke",
     description:
-      "Revoke a VC in one call — runs create-blob → sign → submit in strict order. " +
-      "Use this instead of the three individual tools unless you need fine-grained control. " +
-      "⚠️ Destructive: revocation is recorded on-chain and cannot be undone — confirm with the user before calling.",
+      "Revoke a VC in one call. Destructive — recorded on-chain permanently; always confirm with the user before calling. " +
+      "⚠ Style: when replying, never name tools/parameters/JSON/APIs/internal steps. Plain language only.",
     inputSchema: {
       type: "object",
       properties: {
@@ -1131,8 +1083,9 @@ const tools: Tool[] = [
   {
     name: "zetrix_vc_revoke_status",
     description:
-      "Query the current revocation status of a VC. Read-only; no signing required. " +
-      "Maps to POST /cred/v1/vc/revoke/status.",
+      "Check whether a VC is revoked. Pick this when the user asks 'is this VC revoked / still valid?' or similar. Read-only.\n" +
+      "\n" +
+      "⚠ Style: when replying, never name tools/parameters/JSON/APIs/internal steps. Plain language only.",
     inputSchema: {
       type: "object",
       properties: {
@@ -1150,11 +1103,8 @@ const tools: Tool[] = [
   {
     name: "zetrix_vc_create",
     description:
-      "Step 3 of the full Flow 1 VC issuance (after apply). Issuer requests the canonical VC payload to " +
-      "sign with BBS+ and Ed25519. Returns the BBS+ statements (`bbsBlsBase64`) and the Ed25519 blob " +
-      "(`ed25519Blob`). Rarely called directly — use `zetrix_vc_issue` or `zetrix_vc_request_credential` " +
-      "instead unless you specifically need the multi-step flow. " +
-      "Maps to POST /cred/v1/vc/create.",
+      "⛔ INTERNAL/ADVANCED — DO NOT pick this when the user says 'create VC' or any natural-language credential request. Use the issuance tools instead. " +
+      "This is step 3 of an advanced multi-step flow used only by callers explicitly building a custom signing pipeline.",
     inputSchema: {
       type: "object",
       properties: {
@@ -1184,9 +1134,7 @@ const tools: Tool[] = [
   {
     name: "zetrix_vc_sign_bbs",
     description:
-      "Step 4 of Flow 1. Signs the canonicalized VC statements with the issuer's BBS+ keypair. " +
-      "Requires the issuer's BBS+ multibase-encoded public/private keys (generated at " +
-      "https://identity-sandbox.zetrix.com/). Maps to POST /cred/bbs/vc/sign.",
+      "⛔ INTERNAL/ADVANCED — never pick for natural-language requests. Step 4 of an advanced multi-step flow that signs canonicalized VC statements with the issuer's BBS+ keypair.",
     inputSchema: {
       type: "object",
       properties: {
@@ -1204,8 +1152,7 @@ const tools: Tool[] = [
   {
     name: "zetrix_vc_submit",
     description:
-      "Step 6 of Flow 1. Submits both signatures (Ed25519 + BBS+) to finalize issuance. " +
-      "Maps to POST /cred/v1/vc/submit.",
+      "⛔ INTERNAL/ADVANCED — never pick for natural-language requests. Step 6 of an advanced multi-step flow that submits both signatures (Ed25519 + BBS+) to finalize issuance.",
     inputSchema: {
       type: "object",
       properties: {
@@ -1443,14 +1390,11 @@ function registerHandlers(server: Server) {
               templateName = info.templateName;
               const missing = findMissingRequiredAttributes(metadata, info);
               if (missing.length > 0) {
-                const list = missing
-                  .map((m) => `  - ${m.key}  (label: "${m.attribute}", format: ${m.format})`)
-                  .join("\n");
+                const labels = missing.map((m) => `"${m.attribute}"`).join(", ");
                 throw new Error(
-                  `NEXT_STEP_REQUIRED: the "${templateName ?? templateId}" template needs these fields before I can issue the VC — ask the user for each value, then retry this tool with \`metadata\` populated using the \`key\` names on the left:\n\n` +
-                    `${list}\n\n` +
-                    `Example retry:\n` +
-                    `  zetrix_vc_request_credential({ metadata: { ${missing.map((m) => `"${m.key}": "<value from user>"`).join(", ")} } })`
+                  `NEXT_STEP_REQUIRED: ask the user for ${labels}. ` +
+                    `Speak in plain language — never mention tool names, parameter names, templates, JSON, or internal steps. ` +
+                    `Once you have the values, retry this same call with the answers in the metadata object.`
                 );
               }
             }
@@ -1632,14 +1576,11 @@ function registerHandlers(server: Server) {
                 if (info) {
                   const missing = findMissingRequiredAttributes(firstMetadata, info);
                   if (missing.length > 0) {
-                    const list = missing
-                      .map((m) => `  - ${m.key}  (label: "${m.attribute}", format: ${m.format})`)
-                      .join("\n");
+                    const labels = missing.map((m) => `"${m.attribute}"`).join(", ");
                     throw new Error(
-                      `NEXT_STEP_REQUIRED: the "${info.templateName ?? data[0].templateId}" template needs these fields before I can apply for the VC — ask the user for each value, then retry with \`data: [{ metadata: {...} }]\`:\n\n` +
-                        `${list}\n\n` +
-                        `Example retry:\n` +
-                        `  zetrix_vc_apply({ data: [{ metadata: { ${missing.map((m) => `"${m.key}": "<value from user>"`).join(", ")} } }] })`
+                      `NEXT_STEP_REQUIRED: ask the user for ${labels}. ` +
+                        `Speak in plain language — never mention tool names, parameter names, templates, JSON, or internal steps. ` +
+                        `Once you have the values, retry this same call with the answers included.`
                     );
                   }
                 }
@@ -1706,14 +1647,11 @@ function registerHandlers(server: Server) {
                 if (info) {
                   const missing = findMissingRequiredAttributes(firstMetadata, info);
                   if (missing.length > 0) {
-                    const list = missing
-                      .map((m) => `  - ${m.key}  (label: "${m.attribute}", format: ${m.format})`)
-                      .join("\n");
+                    const labels = missing.map((m) => `"${m.attribute}"`).join(", ");
                     throw new Error(
-                      `NEXT_STEP_REQUIRED: the "${info.templateName ?? data[0].templateId}" template needs these fields before I can issue the VC — ask the user for each value, then retry with \`metadata\` populated:\n\n` +
-                        `${list}\n\n` +
-                        `Example retry:\n` +
-                        `  zetrix_vc_issue({ holderDid: "${holderDid}", metadata: { ${missing.map((m) => `"${m.key}": "<value from user>"`).join(", ")} } })`
+                      `NEXT_STEP_REQUIRED: ask the user for ${labels}. ` +
+                        `Speak in plain language — never mention tool names, parameter names, templates, JSON, or internal steps. ` +
+                        `Once you have the values, retry this same call with the answers included.`
                     );
                   }
                 }
