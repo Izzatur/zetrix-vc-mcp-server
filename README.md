@@ -120,17 +120,43 @@ Each template id below links to its raw record on-chain (via the node's `getAcco
 | **Driving License** | [`did:zid:313d…0a7c`](https://test-node.zetrix.com/getAccountMetaData?address=ZTX3JszqPgRUx743SAp7q7zURfjvkWuH2FMEz&key=template__did:zid:313dc2cf2a9950a688f6b759dfbbbc8cd69e1fb6db1d15d877970119748c0a7c) | [`did:zid:89b3…1d6e`](https://node.zetrix.com/getAccountMetaData?address=ZTX3GqJM1U6ifMPonwD4fGvrgoTKJua7b2cKX&key=template__did:zid:89b37ba3ab25c02d96f3acfd948c68aa7b86c5c313b421522db06b86fc831d6e) |
 | **Passport** | [`did:zid:4820…993e`](https://test-node.zetrix.com/getAccountMetaData?address=ZTX3JszqPgRUx743SAp7q7zURfjvkWuH2FMEz&key=template__did:zid:4820fdbc080dda72335a436bba02252d341302382a58d7bb2ae8fe845579993e) | [`did:zid:24cb…85f1`](https://node.zetrix.com/getAccountMetaData?address=ZTX3GqJM1U6ifMPonwD4fGvrgoTKJua7b2cKX&key=template__did:zid:24cbe3286714b8dde39cdd04094f6b2c8d2c1803882d5762d06eb883971385f1) |
 
-<details>
-<summary>Full template ids (copy-paste into <code>DEFAULT_TEMPLATE_ID</code>)</summary>
+Full template ids — each block below has a **copy button** on github.com (hover the block on desktop, tap on mobile). Paste the value into `DEFAULT_TEMPLATE_ID`.
 
-| Template | UAT | Prod |
-|---|---|---|
-| MyKAD | `did:zid:f1d675934d353394fa90d6132a3f8393b670a326632d936d1174df7307fadba4` | `did:zid:2139cb5dc5c2080ff4f85a85f6ae49322d109992a921d5f8d50e1af5eadf01d5` |
-| Email | `did:zid:9833ccc5238cfe4c61ccad652487c8b05f8c6f20e60073efe051fbbd1ea395aa` | `did:zid:9d0b9a925c66dab30a682446ea0bc75245e93eec6c0bb3a425b50795ebbb1a2e` |
-| Driving License | `did:zid:313dc2cf2a9950a688f6b759dfbbbc8cd69e1fb6db1d15d877970119748c0a7c` | `did:zid:89b37ba3ab25c02d96f3acfd948c68aa7b86c5c313b421522db06b86fc831d6e` |
-| Passport | `did:zid:4820fdbc080dda72335a436bba02252d341302382a58d7bb2ae8fe845579993e` | `did:zid:24cbe3286714b8dde39cdd04094f6b2c8d2c1803882d5762d06eb883971385f1` |
+**MyKAD** — UAT
+```
+did:zid:f1d675934d353394fa90d6132a3f8393b670a326632d936d1174df7307fadba4
+```
+**MyKAD** — Prod
+```
+did:zid:2139cb5dc5c2080ff4f85a85f6ae49322d109992a921d5f8d50e1af5eadf01d5
+```
 
-</details>
+**Email** — UAT
+```
+did:zid:9833ccc5238cfe4c61ccad652487c8b05f8c6f20e60073efe051fbbd1ea395aa
+```
+**Email** — Prod
+```
+did:zid:9d0b9a925c66dab30a682446ea0bc75245e93eec6c0bb3a425b50795ebbb1a2e
+```
+
+**Driving License** — UAT
+```
+did:zid:313dc2cf2a9950a688f6b759dfbbbc8cd69e1fb6db1d15d877970119748c0a7c
+```
+**Driving License** — Prod
+```
+did:zid:89b37ba3ab25c02d96f3acfd948c68aa7b86c5c313b421522db06b86fc831d6e
+```
+
+**Passport** — UAT
+```
+did:zid:4820fdbc080dda72335a436bba02252d341302382a58d7bb2ae8fe845579993e
+```
+**Passport** — Prod
+```
+did:zid:24cbe3286714b8dde39cdd04094f6b2c8d2c1803882d5762d06eb883971385f1
+```
 
 Or use `zetrix_vc_get_template_detail` at runtime to fetch + parse the record programmatically.
 
