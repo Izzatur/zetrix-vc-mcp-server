@@ -344,26 +344,49 @@ ZETRIX_VC_TRANSPORT=http ZETRIX_VC_PORT=3000 npx zetrix-vc-mcp-server 2> server.
 tail -f server.log
 ```
 
-## End-to-End Example
+## Examples
 
 Once configured, simply ask the LLM to do what you want — the agent discovers required fields via the tool itself and asks only for what it needs.
 
 ```
-You:    apply VC for me
+You:    please issue VC to ZTX3MyCKa7k9Vx5HRR9xju1NKNZyqqQB8Nh6f
 
-Agent:  I need your Full Name, IC Number, and MyDigitalID Expiry Date.
+Agent:  I can't use a Zetrix address directly — could you give me their
+        DID, public key, or private key?
 
-You:    Ahmad bin Abdullah, 900101-01-1234, 2030-01-01
+You:    here is the public key: a1b2c3d4e5f6…
 
-Agent:  Done. Your VC has been issued. Saved to ~/mykad-a7fb32898f6a.json.
-        (VC id: did:zid:a7fb32898f6ab6b55e40af533745972e10a276701ac96a463693ce5034ea5e1d)
+Agent:  I also need the holder's Full Name, IC Number, and Expiry Date.
+
+You:    Ali Hassan, 880201-01-5678, 2030-06-15
+
+Agent:  Done! The MyKAD credential has been issued.
+        VC ID: did:zid:5c8e2f91…  •  Valid until: 2027-04-15
 ```
 
-Behind the scenes:
-1. Agent calls the issuance tool with no arguments → tool returns the required template fields.
-2. Agent asks user for those specific fields.
-3. Agent calls again with the answers → tool runs apply → issue → download → writes the VC file.
-4. `validUntil` defaults to +1 year unless the user specifies otherwise.
+```
+You:    please create VP from the VC, reveal only the name
+
+Agent:  Done! Disclosed only: Name.
+        Share token: v2-c3f91cab-…
+        IC Number and Expiry are cryptographically hidden.
+```
+
+```
+You:    please verify this VP: v2-c3f91cab-b635-4b50-aaef-dae986b7532d
+
+Agent:  The presentation is valid ✓
+        Disclosed: name = "Ali Hassan"
+```
+
+See **[`docs/EXAMPLES.md`](docs/EXAMPLES.md)** for 11 complete conversation examples covering:
+- Issue VC (to yourself / by address / by pubkey / by DID / by private key)
+- Create VP with selective disclosure
+- Verify VP by share token or by VP file
+- Revoke a VC
+- Check revocation status
+- Look up template requirements
+- Generate / resolve a DID
 
 ## Development
 
