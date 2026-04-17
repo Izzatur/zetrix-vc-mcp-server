@@ -3,7 +3,7 @@
     "zetrix-vc-prod": {
       "command": "node",
       "args": [
-        "/absolute/path/to/zetrix-vc-mcp-server/dist/index.js"
+        "C:\\absolute\\path\\to\\zetrix-vc-mcp-server\\dist\\index.js"
       ],
       "env": {
         "ZETRIX_VC_NETWORK": "prod",

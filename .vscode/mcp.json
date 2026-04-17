@@ -1,10 +1,12 @@
 {
-  "mcpServers": {
-    "zetrix-vc-uat": {
+  "servers": {
+    "zetrixVc": {
+      "type": "stdio",
       "command": "node",
       "args": [
-        "C:\\absolute\\path\\to\\zetrix-vc-mcp-server\\dist\\index.js"
+        "${workspaceFolder}\\dist\\index.js"
       ],
+      "envFile": "${workspaceFolder}\\.env",
       "env": {
         "ZETRIX_VC_NETWORK": "prod",
         "AWS_GATEWAY_API_KEY": "your-aws-api-gateway-key",

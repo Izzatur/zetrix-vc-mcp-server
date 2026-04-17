@@ -497,6 +497,89 @@ function defaultValidUntil(): string {
   return d.toISOString().slice(0, 10);
 }
 
+/**
+ * Resolve the issuer's Zetrix account address (ZTX3… form) for revocation calls.
+ * Priority:
+ *   1. Explicit `addressArg` (ZTX3… — used as-is, no derivation needed)
+ *   2. `ISSUER_KEY` env when it holds a b001… encoded pubkey → derive address from it
+ *   3. `privateKeyArg` arg or `ISSUER_PRIVATE_KEY` env → derive pubkey → derive address
+ *
+ * Throws with a clear message when none of the above yields a value.
+ */
+async function resolveIssuerAddress(
+  addressArg: string | undefined,
+  privateKeyArg?: string | undefined
+): Promise<string> {
+  const explicit = pick(addressArg);
+  if (explicit) return explicit;
+
+  const pubKeyEnv = asEncodedEd25519PubKey(ISSUER_KEY);
+  if (pubKeyEnv) return signer.getAddressFromPublicKey(pubKeyEnv);
+
+  const privKey = pick(privateKeyArg, ISSUER_PRIVATE_KEY);
+  if (privKey) return signer.getAddressFromPrivateKey(privKey);
+
+  throw new Error(
+    "Cannot resolve issuer address. Provide `issuerAddress` (ZTX3… form), " +
+    "or set ISSUER_KEY (b001… encoded public key) or ISSUER_PRIVATE_KEY environment variable."
+  );
+}
+
+/**
+ * Throw if a date string is not in yyyy-MM-dd format.
+ * Skips validation when value is undefined/empty (optional fields).
+ */
+function validateDateFormat(value: string | undefined, fieldName: string): void {
+  if (!value) return;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    throw new Error(`${fieldName} must be in yyyy-MM-dd format (e.g. "2025-12-31"), got "${value}".`);
+  }
+}
+
+/**
+ * Throw if validFrom is chronologically after validUntil.
+ * Only runs when both values are present.
+ */
+function validateDateOrder(validFrom: string | undefined, validUntil: string): void {
+  if (validFrom && validFrom > validUntil) {
+    throw new Error(`validFrom (${validFrom}) must be before validUntil (${validUntil}).`);
+  }
+}
+
+/**
+ * Throw if the VC has already passed its validity end date.
+ * Checks both `validUntil` (W3C VCDM 2.0) and `expirationDate` (VCDM 1.1).
+ */
+function checkVcExpiry(vc: VerifiableCredential): void {
+  const expiry = pick((vc as any).validUntil, (vc as any).expirationDate);
+  if (expiry && new Date(expiry) < new Date()) {
+    throw new Error(`This credential expired on ${expiry} and cannot be presented.`);
+  }
+}
+
+/**
+ * Throw if any dotted path in `paths` does not resolve inside
+ * `vc.credentialSubject`. Prevents silently producing a VP with
+ * empty selective-disclosure claims.
+ */
+function validateRevealPaths(vc: VerifiableCredential, paths: string[]): void {
+  const subject = (vc as any).credentialSubject ?? {};
+  const invalid = paths.filter((path) => {
+    let node: any = subject;
+    for (const part of path.split(".")) {
+      if (!node || typeof node !== "object" || !(part in node)) return true;
+      node = node[part];
+    }
+    return false;
+  });
+  if (invalid.length > 0) {
+    throw new Error(
+      `revealAttribute path(s) not found in credentialSubject: ${invalid.map((p) => `"${p}"`).join(", ")}. ` +
+      `Check the path format — use dotted notation matching the VC structure (e.g. "mykad.name", "mykad.icNo").`
+    );
+  }
+}
+
 function toTextResult(payload: unknown) {
   return {
     content: [
@@ -1539,14 +1622,22 @@ function registerHandlers(server: Server) {
           // Default validUntil to +1 year when the caller doesn't supply one
           // — VCs without a validity end aren't useful in practice, and the
           // BaaS accepts yyyy-MM-dd format.
+          const issuanceDate = args.issuanceDate as string | undefined;
+          const expirationDate = args.expirationDate as string | undefined;
+          const validFrom = args.validFrom as string | undefined;
           const resolvedValidUntil = pick(args.validUntil as string | undefined) ?? defaultValidUntil();
+          validateDateFormat(issuanceDate, "issuanceDate");
+          validateDateFormat(expirationDate, "expirationDate");
+          validateDateFormat(validFrom, "validFrom");
+          validateDateFormat(resolvedValidUntil, "validUntil");
+          validateDateOrder(validFrom, resolvedValidUntil);
           const issueResp = await vcClient.issueVc({
             data,
             holderDid,
             issuerPrivateKey,
-            issuanceDate: args.issuanceDate as string | undefined,
-            expirationDate: args.expirationDate as string | undefined,
-            validFrom: args.validFrom as string | undefined,
+            issuanceDate,
+            expirationDate,
+            validFrom,
             validUntil: resolvedValidUntil,
             keyExpiry: args.keyExpiry as number | undefined,
           });
@@ -1689,9 +1780,10 @@ function registerHandlers(server: Server) {
                   }
                 }
               } catch (e) {
-                // If probing fails (e.g. network), fall through; the BaaS will
-                // reject an empty metadata and we'll surface that error.
-                if (e instanceof Error && e.message.startsWith("NEXT_STEP_REQUIRED")) throw e;
+                // Propagate all errors — including network/TDS failures — so
+                // the caller sees a clear message instead of a silent fall-through
+                // to a confusing BaaS rejection. Consistent with request_credential.
+                throw e;
               }
             }
           }
@@ -1760,7 +1852,10 @@ function registerHandlers(server: Server) {
                   }
                 }
               } catch (e) {
-                if (e instanceof Error && e.message.startsWith("NEXT_STEP_REQUIRED")) throw e;
+                // Propagate all errors — including network/TDS failures — so
+                // the caller sees a clear message instead of a silent fall-through
+                // to a confusing BaaS rejection. Consistent with request_credential.
+                throw e;
               }
             }
           }
@@ -1771,14 +1866,22 @@ function registerHandlers(server: Server) {
             args.issuerPrivateKey as string | undefined
           );
           // Default validUntil to +1 year when not supplied by the caller.
+          const issuanceDate = args.issuanceDate as string | undefined;
+          const expirationDate = args.expirationDate as string | undefined;
+          const validFrom = args.validFrom as string | undefined;
           const resolvedValidUntil = pick(args.validUntil as string | undefined) ?? defaultValidUntil();
+          validateDateFormat(issuanceDate, "issuanceDate");
+          validateDateFormat(expirationDate, "expirationDate");
+          validateDateFormat(validFrom, "validFrom");
+          validateDateFormat(resolvedValidUntil, "validUntil");
+          validateDateOrder(validFrom, resolvedValidUntil);
           const resp = await vcClient.issueVc({
             holderDid,
             data,
             issuerPrivateKey,
-            issuanceDate: args.issuanceDate as string | undefined,
-            expirationDate: args.expirationDate as string | undefined,
-            validFrom: args.validFrom as string | undefined,
+            issuanceDate,
+            expirationDate,
+            validFrom,
             validUntil: resolvedValidUntil,
             keyExpiry: args.keyExpiry as number | undefined,
           });
@@ -1840,6 +1943,11 @@ function registerHandlers(server: Server) {
         case "zetrix_vp_create": {
           const vc = args.vc as VerifiableCredential | undefined;
           if (!vc) throw new Error("`vc` is required.");
+          checkVcExpiry(vc);
+          const revealAttributeVpCreate = args.revealAttribute as string[] | undefined;
+          if (Array.isArray(revealAttributeVpCreate) && revealAttributeVpCreate.length > 0) {
+            validateRevealPaths(vc, revealAttributeVpCreate);
+          }
 
           // Only forward ed25519PubKey / bbsPublicKey when the caller explicitly
           // supplies them. Auto-deriving them from holder keys caused the
@@ -1852,7 +1960,7 @@ function registerHandlers(server: Server) {
             vc,
             revealAttribute: args.revealAttribute as string[] | undefined,
             rangeProof: args.rangeProof as RangeProofDto | undefined,
-            bbsPublicKey: asEncodedEd25519PubKey(args.bbsPublicKey as string | undefined),
+            bbsPublicKey: pick(args.bbsPublicKey as string | undefined),
             ed25519PubKey: asEncodedEd25519PubKey(args.ed25519PubKey as string | undefined),
           });
           return toTextResult(resp);
@@ -1912,6 +2020,11 @@ function registerHandlers(server: Server) {
         case "zetrix_vp_present": {
           const vc = args.vc as VerifiableCredential | undefined;
           if (!vc) throw new Error("`vc` is required.");
+          checkVcExpiry(vc);
+          const revealAttribute = args.revealAttribute as string[] | undefined;
+          if (Array.isArray(revealAttribute) && revealAttribute.length > 0) {
+            validateRevealPaths(vc, revealAttribute);
+          }
           // Explicit args override env vars (HOLDER_PRIVATE_KEY / HOLDER_KEY).
           const holderPrivateKey = requireEnv(
             HOLDER_PRIVATE_KEY,
@@ -1933,7 +2046,7 @@ function registerHandlers(server: Server) {
             vc,
             revealAttribute: args.revealAttribute as string[] | undefined,
             rangeProof: args.rangeProof as RangeProofDto | undefined,
-            bbsPublicKey: asEncodedEd25519PubKey(args.bbsPublicKey as string | undefined),
+            bbsPublicKey: pick(args.bbsPublicKey as string | undefined),
           });
 
           // 2. Sign the blob with the holder's private key. vp/create returns
@@ -1997,9 +2110,7 @@ function registerHandlers(server: Server) {
         // --------- Revocation Flow 3 ---------
         case "zetrix_vc_revoke_create_blob": {
           const vcId = requireArg(args.vcId as string | undefined, "vcId");
-          const issuerAddress = requireEnv(
-            ISSUER_KEY,
-            "issuerAddress (or ISSUER_KEY env)",
+          const issuerAddress = await resolveIssuerAddress(
             args.issuerAddress as string | undefined
           );
           const resp = await vcClient.revokeCreateBlob({
@@ -2022,15 +2133,14 @@ function registerHandlers(server: Server) {
 
         case "zetrix_vc_revoke": {
           const vcId = requireArg(args.vcId as string | undefined, "vcId");
-          const issuerAddress = requireEnv(
-            ISSUER_KEY,
-            "issuerAddress (or ISSUER_KEY env)",
-            args.issuerAddress as string | undefined
-          );
           const issuerPrivateKey = requireEnv(
             ISSUER_PRIVATE_KEY,
             "ISSUER_PRIVATE_KEY",
             args.issuerPrivateKey as string | undefined
+          );
+          const issuerAddress = await resolveIssuerAddress(
+            args.issuerAddress as string | undefined,
+            issuerPrivateKey
           );
 
           // Step 1: request the blob to sign
@@ -2065,9 +2175,7 @@ function registerHandlers(server: Server) {
 
         case "zetrix_vc_revoke_status": {
           const vcId = requireArg(args.vcId as string | undefined, "vcId");
-          const issuer = requireEnv(
-            ISSUER_KEY,
-            "issuer (or ISSUER_KEY env)",
+          const issuer = await resolveIssuerAddress(
             args.issuer as string | undefined
           );
           const resp = await vcClient.revokeStatus({ vcId, issuer });
@@ -2082,13 +2190,22 @@ function registerHandlers(server: Server) {
             throw new Error("`data` must be a non-empty array of TemplateMetadataDto.");
           }
           const data = applyDefaultTemplateId(rawData);
+          const issuanceDate = args.issuanceDate as string | undefined;
+          const expirationDate = args.expirationDate as string | undefined;
+          const validFrom = args.validFrom as string | undefined;
+          const validUntil = args.validUntil as string | undefined;
+          validateDateFormat(issuanceDate, "issuanceDate");
+          validateDateFormat(expirationDate, "expirationDate");
+          validateDateFormat(validFrom, "validFrom");
+          validateDateFormat(validUntil, "validUntil");
+          if (validFrom && validUntil) validateDateOrder(validFrom, validUntil);
           const resp = await vcClient.createVc({
             vcId,
             data,
-            issuanceDate: args.issuanceDate as string | undefined,
-            expirationDate: args.expirationDate as string | undefined,
-            validFrom: args.validFrom as string | undefined,
-            validUntil: args.validUntil as string | undefined,
+            issuanceDate,
+            expirationDate,
+            validFrom,
+            validUntil,
           });
           return toTextResult(resp);
         }

@@ -211,6 +211,20 @@ By setting keys as environment variables, the LLM never needs to see or handle t
 
 > **Note:** Every credential can also be passed per-call via tool arguments (`issuerPrivateKey`, `holderPublicKey`, etc.). Explicit arguments always override env values. Addresses like `ZTX3…` cannot be used as DIDs — the tool will reject them and ask for the DID / public key / private key instead.
 
+### GitHub Copilot / VS Code
+
+This repository now includes a workspace MCP config at **`.vscode/mcp.json`** for local development in VS Code / GitHub Copilot.
+
+1. Build the server:
+   ```bash
+   npm install
+   npm run build
+   ```
+2. Copy **`.env.example`** to **`.env`** and fill in your private keys / API keys.
+3. Open **`.vscode/mcp.json`** in VS Code and click **Start**, or run **MCP: Open Workspace Folder MCP Configuration** followed by **MCP: List Servers**.
+
+The checked-in config keeps secrets out of source control by loading them from **`.env`** while wiring in the local workspace build from **`dist\index.js`**.
+
 ### Claude Code (CLI)
 
 Add the MCP server directly from the command line:

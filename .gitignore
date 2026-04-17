@@ -8,13 +8,11 @@ yarn-debug.log*
 yarn-error.log*
 .DS_Store
 .idea/
-.vscode/
+.vscode/*
+!.vscode/
+!.vscode/mcp.json
 .claude/
 
 # Packed tarballs (produced by `npm pack` / `npm publish`)
 *.tgz
 
-# Downloaded VC files produced by zetrix_vc_download / request_credential
-mykad-*.json
-vc-*.json
-*-[0-9a-f]{8,16}.json

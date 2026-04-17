@@ -100,6 +100,19 @@ export class ZetrixVcSigner {
     const bytes = new Uint8Array(Buffer.from(payload, "utf8"));
     return this.signature.verify(bytes, signData, publicKey);
   }
+
+  /** Derive the Zetrix account address (ZTX3… form) from an encoded public key (`b001…`). */
+  async getAddressFromPublicKey(encodedPublicKey: string): Promise<string> {
+    await this.init();
+    return this.KeyPair.getAddress(encodedPublicKey);
+  }
+
+  /** Derive the Zetrix account address (ZTX3… form) from a private key. */
+  async getAddressFromPrivateKey(privateKey: string): Promise<string> {
+    await this.init();
+    const encPublicKey = this.KeyPair.getEncPublicKey(privateKey);
+    return this.KeyPair.getAddress(encPublicKey);
+  }
 }
 
 /**
